@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ChatFloat</string>
+    <string name="welcome">Bem-vindo ao ChatFloat</string>
+    <string name="login">Entrar</string>
+    <string name="register">Criar conta</string>
+    <string name="email">E-mail</string>
+    <string name="password">Senha</string>
+    <string name="username">Nome de usuário</string>
+    <string name="send">Enviar</string>
+    <string name="message_hint">Digite uma mensagem…</string>
+    <string name="start_floating">Iniciar janela flutuante</string>
+    <string name="stop_floating">Parar janela flutuante</string>
+    <string name="overlay_permission_required">Permissão de sobreposição é necessária para o chat flutuante</string>
+    <string name="grant_permission">Conceder permissão</string>
+    <string name="logout">Sair</string>
+    <string name="floating_chat">Chat Flutuante</string>
+    <string name="general_room">Sala geral</string>
+    <string name="notification_channel_name">Chat Flutuante</string>
+    <string name="notification_channel_desc">Notificação do serviço de chat flutuante</string>
+    <string name="empty_messages">Sem mensagens ainda. Diga oi!</string>
+    <string name="auth_failed">Falha na autenticação. Verifique suas credenciais.</string>
+    <string name="fill_all_fields">Preencha todos os campos</string>
+    <string name="password_too_short">A senha deve ter ao menos 6 caracteres</string>
+    <string name="invalid_email">E-mail inválido</string>
+    <string name="username_required">Nome de usuário é obrigatório</string>
+    <string name="already_have_account">Já tem conta? Entrar</string>
+    <string name="no_account_yet">Não tem conta? Criar</string>
+    <string name="sending">Enviando…</string>
+    <string name="signed_in_as">Conectado como %1$s</string>
+    <string name="close">Fechar</string>
+    <string name="collapse">Recolher</string>
+    <string name="expand">Expandir</string>
+</resources>

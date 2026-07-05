@@ -1,0 +1,32 @@
+package com.deivid22srk.chatfloat.data
+
+import com.deivid22srk.chatfloat.BuildConfig
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.realtime.Realtime
+import io.ktor.client.engine.cio.CIO
+
+/**
+ * Singleton wrapper around the Supabase client.
+ * Provides Auth, Postgrest and Realtime modules.
+ */
+object SupabaseClient {
+
+    val client by lazy {
+        createSupabaseClient(
+            supabaseUrl = BuildConfig.SUPABASE_URL,
+            supabaseKey = BuildConfig.SUPABASE_ANON_KEY
+        ) {
+            install(Auth)
+            install(Postgrest)
+            install(Realtime)
+            httpEngine(CIO)
+        }
+    }
+
+    fun init() {
+        // Trigger lazy initialization
+        client
+    }
+}
