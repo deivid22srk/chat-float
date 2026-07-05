@@ -104,17 +104,19 @@ class FloatingChatService : Service() {
     private var pollingJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Colors — mirror the Compose theme
-    private val colorPrimary = Color.parseColor("#6366F1")
-    private val colorPrimaryDark = Color.parseColor("#4F46E5")
-    private val colorSurface = Color.parseColor("#FAFAFC")
-    private val colorSurfaceElevated = Color.parseColor("#FFFFFF")
-    private val colorSurfaceVariant = Color.parseColor("#F1F1F5")
-    private val colorOutline = Color.parseColor("#E4E4E7")
-    private val colorTextPrimary = Color.parseColor("#18181B")
-    private val colorTextSecondary = Color.parseColor("#71717A")
-    private val colorBubbleOutgoing = Color.parseColor("#6366F1")
-    private val colorBubbleIncoming = Color.parseColor("#F4F4F5")
+    // Colors — resolved in onCreate based on system dark/light theme.
+    // Light palette mirrors the Compose LightColors; dark palette mirrors DarkColors.
+    private var colorPrimary = Color.parseColor("#6366F1")
+    private var colorPrimaryDark = Color.parseColor("#4F46E5")
+    private var colorSurface = Color.parseColor("#FAFAFC")
+    private var colorSurfaceElevated = Color.parseColor("#FFFFFF")
+    private var colorSurfaceVariant = Color.parseColor("#F1F1F5")
+    private var colorOutline = Color.parseColor("#E4E4E7")
+    private var colorTextPrimary = Color.parseColor("#18181B")
+    private var colorTextSecondary = Color.parseColor("#71717A")
+    private var colorBubbleOutgoing = Color.parseColor("#6366F1")
+    private var colorBubbleIncoming = Color.parseColor("#F4F4F5")
+    private var colorAvatarBg = Color.parseColor("#E0E7FF")
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -122,7 +124,45 @@ class FloatingChatService : Service() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         imageLoader = ImageLoader.Builder(this).build()
+        resolveThemeColors()
         startForeground(NOTIFICATION_ID, buildNotification())
+    }
+
+    /**
+     * Sets the color palette based on the system's current dark/light mode.
+     * The overlay re-reads this every time it's created, so if the user
+     * toggles dark mode while the service is running, the new colors apply
+     * on next overlay rebuild.
+     */
+    private fun resolveThemeColors() {
+        val nightMode = resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        val isDark = nightMode == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        if (isDark) {
+            colorPrimary = Color.parseColor("#818CF8")        // indigo-400
+            colorPrimaryDark = Color.parseColor("#4F46E5")
+            colorSurface = Color.parseColor("#0F0F14")
+            colorSurfaceElevated = Color.parseColor("#1A1A22")
+            colorSurfaceVariant = Color.parseColor("#27272E")
+            colorOutline = Color.parseColor("#3F3F46")
+            colorTextPrimary = Color.parseColor("#FAFAFC")
+            colorTextSecondary = Color.parseColor("#A1A1AA")
+            colorBubbleOutgoing = Color.parseColor("#6366F1")
+            colorBubbleIncoming = Color.parseColor("#27272E")
+            colorAvatarBg = Color.parseColor("#3F3F46")
+        } else {
+            colorPrimary = Color.parseColor("#6366F1")
+            colorPrimaryDark = Color.parseColor("#4F46E5")
+            colorSurface = Color.parseColor("#FAFAFC")
+            colorSurfaceElevated = Color.parseColor("#FFFFFF")
+            colorSurfaceVariant = Color.parseColor("#F1F1F5")
+            colorOutline = Color.parseColor("#E4E4E7")
+            colorTextPrimary = Color.parseColor("#18181B")
+            colorTextSecondary = Color.parseColor("#71717A")
+            colorBubbleOutgoing = Color.parseColor("#6366F1")
+            colorBubbleIncoming = Color.parseColor("#F4F4F5")
+            colorAvatarBg = Color.parseColor("#E0E7FF")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -173,7 +213,7 @@ class FloatingChatService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = 40
             y = 200
-            width = dp(320)
+            width = dp(280)
         }
 
         windowManager.addView(root, params)
@@ -189,47 +229,47 @@ class FloatingChatService : Service() {
         val expanded = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                cornerRadius = dp(24).toFloat()
+                cornerRadius = dp(20).toFloat()
                 setColor(colorSurfaceElevated)
                 setStroke(dp(1), colorOutline)
             }
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            elevation = dp(12).toFloat()
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            elevation = dp(10).toFloat()
         }
 
         // === Header (draggable) ===
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(10), dp(8), dp(10))
+            setPadding(dp(12), dp(8), dp(6), dp(8))
             background = GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
+                cornerRadius = dp(16).toFloat()
                 setColor(colorPrimary)
             }
         }
         val titleEmoji = TextView(ctx).apply {
             text = "💬"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         }
         val title = TextView(ctx).apply {
             text = "ChatFloat"
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTypeface(null, Typeface.BOLD)
             val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            lp.marginStart = dp(10)
+            lp.marginStart = dp(8)
             layoutParams = lp
         }
         val btnMinimize = ImageButton(ctx).apply {
             setImageResource(android.R.drawable.ic_menu_view)
             background = null
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(8), dp(8), dp(8), dp(8))
             imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
         }
         val btnClose = ImageButton(ctx).apply {
             setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
             background = null
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(8), dp(8), dp(8), dp(8))
             imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
         }
         header.addView(titleEmoji)
@@ -241,7 +281,7 @@ class FloatingChatService : Service() {
         val actionPanel = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = dp(10)
+            lp.topMargin = dp(6)
             layoutParams = lp
         }
         val actionRow = LinearLayout(ctx).apply {
@@ -266,12 +306,12 @@ class FloatingChatService : Service() {
         }
         val scrollView = ScrollView(ctx).apply {
             addView(messagesContainer)
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(240))
-            lp.topMargin = dp(10)
-            lp.bottomMargin = dp(10)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(160))
+            lp.topMargin = dp(8)
+            lp.bottomMargin = dp(8)
             layoutParams = lp
             background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
+                cornerRadius = dp(14).toFloat()
                 setColor(colorSurfaceVariant)
             }
         }
@@ -287,32 +327,32 @@ class FloatingChatService : Service() {
 
         // === Input row ===
         val input = EditText(ctx).apply {
-            hint = "Digite uma mensagem…"
-            setHintTextColor(Color.parseColor("#A1A1AA"))
+            hint = "Mensagem…"
+            setHintTextColor(colorTextSecondary)
             background = GradientDrawable().apply {
-                cornerRadius = dp(24).toFloat()
-                setColor(colorSurfaceElevated)
+                cornerRadius = dp(20).toFloat()
+                setColor(colorSurface)
                 setStroke(dp(1), colorOutline)
             }
             setTextColor(colorTextPrimary)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            maxLines = 3
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            maxLines = 2
             isFocusable = true
             isFocusableInTouchMode = true
             val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            lp.marginEnd = dp(8)
+            lp.marginEnd = dp(6)
             layoutParams = lp
         }
         val btnSend = Button(ctx).apply {
             text = "➤"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             background = GradientDrawable().apply {
-                cornerRadius = dp(24).toFloat()
+                cornerRadius = dp(20).toFloat()
                 setColor(colorPrimary)
             }
             setTextColor(Color.WHITE)
-            setPadding(dp(20), dp(12), dp(20), dp(12))
+            setPadding(dp(16), dp(8), dp(16), dp(8))
             minEms = 1
         }
         val inputRow = LinearLayout(ctx).apply {
@@ -398,27 +438,27 @@ class FloatingChatService : Service() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
-                cornerRadius = dp(20).toFloat()
+                cornerRadius = dp(16).toFloat()
                 setColor(colorSurfaceVariant)
                 setStroke(dp(1), colorOutline)
             }
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setPadding(dp(10), dp(6), dp(10), dp(6))
             val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.marginEnd = dp(8)
+            lp.marginEnd = dp(6)
             layoutParams = lp
             isClickable = true
         }
         val emojiTv = TextView(ctx).apply {
             text = emoji
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
         val labelTv = TextView(ctx).apply {
             text = label
             setTextColor(colorTextPrimary)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTypeface(null, Typeface.NORMAL)
             val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.marginStart = dp(6)
+            lp.marginStart = dp(4)
             layoutParams = lp
         }
         btn.addView(emojiTv)
@@ -480,7 +520,7 @@ class FloatingChatService : Service() {
                     scaleType = ImageView.ScaleType.CENTER_CROP
                     background = GradientDrawable().apply {
                         shape = GradientDrawable.OVAL
-                        setColor(Color.parseColor("#E0E7FF"))
+                        setColor(colorAvatarBg)
                     }
                     clipToOutline = true
                     outlineProvider = object : android.view.ViewOutlineProvider() {
@@ -500,19 +540,19 @@ class FloatingChatService : Service() {
                 }
                 // Frame containing avatar + initials overlay
                 val avatarFrame = FrameLayout(this).apply {
-                    val lp = LinearLayout.LayoutParams(dp(28), dp(28))
-                    lp.marginEnd = dp(6)
+                    val lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                    lp.marginEnd = dp(5)
                     lp.gravity = Gravity.TOP or Gravity.START
                     layoutParams = lp
                 }
-                avatar.layoutParams = FrameLayout.LayoutParams(dp(28), dp(28))
+                avatar.layoutParams = FrameLayout.LayoutParams(dp(24), dp(24))
                 val initials = TextView(this).apply {
                     text = msg.senderName.take(2).uppercase()
                     setTextColor(colorPrimary)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
                     setTypeface(null, Typeface.BOLD)
                     gravity = Gravity.CENTER
-                    layoutParams = FrameLayout.LayoutParams(dp(28), dp(28))
+                    layoutParams = FrameLayout.LayoutParams(dp(24), dp(24))
                 }
                 avatarFrame.addView(avatar)
                 avatarFrame.addView(initials)
@@ -543,25 +583,24 @@ class FloatingChatService : Service() {
 
             val bubble = TextView(this).apply {
                 text = msg.text
-                setTextColor(if (isOutgoing) Color.WHITE else colorTextPrimary)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setPadding(dp(14), dp(10), dp(14), dp(10))
+                setTextColor(if (isOutgoing) Color.White else colorTextPrimary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(dp(10), dp(7), dp(10), dp(7))
                 background = GradientDrawable().apply {
-                    cornerRadius = dp(18).toFloat()
+                    cornerRadius = dp(14).toFloat()
                     cornerRadii = floatArrayOf(
-                        dp(18).toFloat(), dp(18).toFloat(),  // top-left, top-left
-                        dp(18).toFloat(), dp(18).toFloat(),  // top-right, top-right
-                        if (isOutgoing) dp(4).toFloat() else dp(18).toFloat(),  // bottom-right
-                        if (isOutgoing) dp(4).toFloat() else dp(18).toFloat(),
-                        if (isOutgoing) dp(18).toFloat() else dp(4).toFloat(),  // bottom-left
-                        if (isOutgoing) dp(18).toFloat() else dp(4).toFloat()
+                        dp(14).toFloat(), dp(14).toFloat(),
+                        dp(14).toFloat(), dp(14).toFloat(),
+                        if (isOutgoing) dp(4).toFloat() else dp(14).toFloat(),
+                        if (isOutgoing) dp(4).toFloat() else dp(14).toFloat(),
+                        if (isOutgoing) dp(14).toFloat() else dp(4).toFloat(),
+                        if (isOutgoing) dp(14).toFloat() else dp(4).toFloat()
                     )
                     setColor(if (isOutgoing) colorBubbleOutgoing else colorBubbleIncoming)
                 }
                 val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                lp.bottomMargin = dp(2)
-                // Constrain max width
-                maxWidth = dp(220)
+                lp.bottomMargin = dp(1)
+                maxWidth = dp(190)
                 layoutParams = lp
             }
             col.addView(bubble)
@@ -570,10 +609,10 @@ class FloatingChatService : Service() {
             val time = TextView(this).apply {
                 text = formatTime(msg.timestamp)
                 setTextColor(colorTextSecondary)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 8f)
                 val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 lp.gravity = if (isOutgoing) Gravity.END else Gravity.START
-                if (isOutgoing) lp.marginEnd = dp(4) else lp.marginStart = dp(10)
+                if (isOutgoing) lp.marginEnd = dp(4) else lp.marginStart = dp(8)
                 layoutParams = lp
             }
             col.addView(time)
@@ -765,7 +804,7 @@ class FloatingChatService : Service() {
         val density = Resources.getSystem().displayMetrics.density
         val dp = { v: Int -> (v * density).toInt() }
         expandedParams?.let { p ->
-            p.width = dp(320)
+            p.width = dp(280)
             p.height = WindowManager.LayoutParams.WRAP_CONTENT
             rootView?.let { windowManager.updateViewLayout(it, p) }
         }
