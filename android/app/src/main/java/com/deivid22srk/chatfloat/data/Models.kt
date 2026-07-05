@@ -29,5 +29,7 @@ data class ChatMessage(
     @SerialName("sender_token") val senderToken: String? = null,
     @SerialName("sender_avatar") val senderAvatar: String? = null,
     val timestamp: Long,
-    @SerialName("is_outgoing") val isOutgoing: Boolean
+    @SerialName("is_outgoing") val isOutgoing: Boolean,
+    @SerialName("media_url") val mediaUrl: String? = null,
+    @SerialName("media_type") val mediaType: String = ""
 )
