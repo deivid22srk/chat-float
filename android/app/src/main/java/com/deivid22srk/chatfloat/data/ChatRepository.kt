@@ -6,13 +6,11 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.RealtimeChannel
-import io.github.jan.supabase.realtime.createChannel
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.realtime
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
-import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * Repository that exposes chat operations and realtime stream.
@@ -27,7 +25,9 @@ class ChatRepository {
         auth.signUpWith(Email) {
             this.email = email
             this.password = password
-            data = mapOf("username" to username)
+            data = buildJsonObject {
+                put("username", username)
+            }
         }
     }
 
@@ -88,33 +88,11 @@ class ChatRepository {
         return cachedGeneralRoomId
     }
 
-    /**
-     * Subscribes to the realtime channel and emits new messages as they arrive.
-     * Caller must call [startRealtime] before collecting the returned flow.
-     */
-    fun observeMessages(): Flow<Message> {
-        val channel: RealtimeChannel = client.realtime.createChannel("public:messages")
-
-        return channel.postgresChangeFlow<PostgresAction.Insert>("public") {
-            table = "messages"
-        }.map { action ->
-            val record = action.record
-            Message(
-                id = record["id"]?.jsonPrimitive?.content ?: "",
-                roomId = record["room_id"]?.jsonPrimitive?.content,
-                userId = record["user_id"]?.jsonPrimitive?.content,
-                username = record["username"]?.jsonPrimitive?.content ?: "",
-                content = record["content"]?.jsonPrimitive?.content ?: "",
-                createdAt = record["created_at"]?.jsonPrimitive?.content
-            )
-        }
-    }
-
     suspend fun startRealtime() {
         client.realtime.connect()
     }
 
     /** Returns a [RealtimeChannel] that must be subscribed + collected by the caller. */
     fun messagesChannel(): RealtimeChannel =
-        client.realtime.createChannel("public:messages")
+        client.realtime.channel("public:messages")
 }
