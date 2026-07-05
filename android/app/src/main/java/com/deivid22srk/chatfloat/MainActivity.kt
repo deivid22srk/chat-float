@@ -4,17 +4,28 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.deivid22srk.chatfloat.data.TelegramBotRepository
+import com.deivid22srk.chatfloat.ui.AuthViewModel
 import com.deivid22srk.chatfloat.ui.ChatViewModel
 import com.deivid22srk.chatfloat.ui.screens.ChatScreen
-import com.deivid22srk.chatfloat.ui.screens.UsernameScreen
+import com.deivid22srk.chatfloat.ui.screens.CreateAccountScreen
+import com.deivid22srk.chatfloat.ui.screens.LoginScreen
+import com.deivid22srk.chatfloat.ui.screens.SettingsScreen
+import com.deivid22srk.chatfloat.ui.screens.WelcomeScreen
 import com.deivid22srk.chatfloat.ui.theme.ChatFloatTheme
 
 class MainActivity : ComponentActivity() {
@@ -34,26 +45,78 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private enum class Screen { Root, CreateAccount, Login, Chat, Settings }
+
 @Composable
 fun AppRoot() {
+    val context = LocalContext.current
+    val authVm: AuthViewModel = viewModel()
     val chatVm: ChatViewModel = viewModel()
-    val username by chatVm.username.collectAsState()
 
-    AppLifecycleObserver(chatVm)
+    val telegramRepo = remember { TelegramBotRepository() }
 
-    if (username.isEmpty()) {
-        UsernameScreen(onSave = { chatVm.setUsername(it) })
-    } else {
-        ChatScreen(viewModel = chatVm)
+    // Initialize view models with the repo + context
+    LaunchedEffect(Unit) {
+        authVm.init(context, telegramRepo)
+        chatVm.init(context, telegramRepo)
     }
-}
 
-@Composable
-private fun AppLifecycleObserver(viewModel: ChatViewModel) {
-    // Trigger init once
-    val context = androidx.compose.ui.platform.LocalContext.current
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        viewModel.init(context)
-        viewModel.startPolling()
+    val authState by authVm.state.collectAsState()
+
+    var screen by rememberSaveable { mutableStateOf(Screen.Root) }
+
+    when (val s = authState) {
+        AuthViewModel.AuthState.Loading -> {
+            // Show nothing while loading
+        }
+        AuthViewModel.AuthState.Unauthenticated -> {
+            when (screen) {
+                Screen.CreateAccount -> CreateAccountScreen(
+                    viewModel = authVm,
+                    onBack = { screen = Screen.Root }
+                )
+                Screen.Login -> LoginScreen(
+                    viewModel = authVm,
+                    onBack = { screen = Screen.Root }
+                )
+                else -> WelcomeScreen(
+                    onCreateAccount = { screen = Screen.CreateAccount },
+                    onLoginWithToken = { screen = Screen.Login }
+                )
+            }
+        }
+        is AuthViewModel.AuthState.Authenticated -> {
+            // Start chat polling once authenticated
+            LaunchedEffect(s.token) {
+                chatVm.startPolling()
+            }
+
+            // If we just created an account and the token is being shown,
+            // CreateAccountScreen handles the transition itself.
+            val newlyCreatedToken by authVm.newlyCreatedToken.collectAsState()
+            if (newlyCreatedToken != null && screen == Screen.CreateAccount) {
+                CreateAccountScreen(
+                    viewModel = authVm,
+                    onBack = { screen = Screen.Root }
+                )
+            } else {
+                when (screen) {
+                    Screen.Settings -> SettingsScreen(
+                        authVm = authVm,
+                        onBack = { screen = Screen.Chat }
+                    )
+                    else -> {
+                        // Default to chat
+                        screen = Screen.Chat
+                        ChatScreen(
+                            viewModel = chatVm,
+                            username = s.username,
+                            avatarBase64 = s.avatarBase64,
+                            onOpenSettings = { screen = Screen.Settings }
+                        )
+                    }
+                }
+            }
+        }
     }
 }

@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.PictureInPicture
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -50,15 +51,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deivid22srk.chatfloat.service.FloatingChatService
 import com.deivid22srk.chatfloat.ui.ChatViewModel
+import com.deivid22srk.chatfloat.ui.components.Avatar
 import com.deivid22srk.chatfloat.ui.components.MessageBubble
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: ChatViewModel) {
+fun ChatScreen(
+    viewModel: ChatViewModel,
+    username: String,
+    avatarBase64: String?,
+    onOpenSettings: () -> Unit
+) {
     val context = LocalContext.current
     val messages by viewModel.messages.collectAsState()
     val sending by viewModel.sending.collectAsState()
-    val username by viewModel.username.collectAsState()
 
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -73,17 +79,25 @@ fun ChatScreen(viewModel: ChatViewModel) {
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            "ChatFloat",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 18.sp
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(
+                            base64 = avatarBase64,
+                            initials = username.take(2).uppercase(),
+                            size = 36
                         )
-                        Text(
-                            "Conectado como $username",
-                            fontSize = 11.sp,
-                            color = Color.White.copy(alpha = 0.85f)
-                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                "ChatFloat",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 18.sp
+                            )
+                            Text(
+                                "Conectado como $username",
+                                fontSize = 11.sp,
+                                color = Color.White.copy(alpha = 0.85f)
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -102,6 +116,9 @@ fun ChatScreen(viewModel: ChatViewModel) {
                         }
                     }) {
                         Icon(Icons.Filled.PictureInPicture, contentDescription = "Janela flutuante")
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Configurações")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

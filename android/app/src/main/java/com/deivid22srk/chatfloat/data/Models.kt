@@ -2,6 +2,7 @@ package com.deivid22srk.chatfloat.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class TelegramResponse<T>(
@@ -54,15 +55,33 @@ data class SendMessageResponse(
 )
 
 /**
- * Local representation of a chat message.
- * - Sent from this device: fromBot = true, senderName = local username
- * - Received from a real Telegram user: fromBot = false, senderName = user's first name
+ * Local representation of a chat message shown in the UI.
  */
 data class ChatMessage(
     val id: Long,
     val text: String,
     val senderName: String,
-    val fromBot: Boolean,        // true if message was sent by this bot
+    val senderToken: String?,    // 8-char token identifying the sender
+    val senderAvatar: String?,   // base64 PNG (may be null)
     val timestamp: Long,
-    val isOutgoing: Boolean      // true if message was sent from this app instance
+    val isOutgoing: Boolean
+)
+
+/**
+ * Structured message envelope used for registration/system messages stored
+ * in the Telegram group as JSON-encoded text.
+ *
+ * Format of the text: "##CHATFLOAT##<base64-json>"
+ *
+ * Two kinds:
+ *   - REGISTER: announces a token + username + optional avatar
+ *   - AVATAR:   updates the avatar for a known token
+ */
+@Serializable
+data class AccountEnvelope(
+    val type: String,            // "REGISTER" | "AVATAR"
+    val token: String,
+    val username: String? = null,
+    val avatarBase64: String? = null,
+    val createdAt: Long = 0
 )

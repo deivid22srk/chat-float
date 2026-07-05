@@ -1,11 +1,17 @@
 package com.deivid22srk.chatfloat.ui
 
 import android.content.Context
-import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.deivid22srk.chatfloat.data.AccountEnvelope
+import com.deivid22srk.chatfloat.data.AccountManager
+import com.deivid22srk.chatfloat.data.ChatFloatDatabase
 import com.deivid22srk.chatfloat.data.ChatMessage
+import com.deivid22srk.chatfloat.data.KnownAccountEntity
+import com.deivid22srk.chatfloat.data.MessageEntity
 import com.deivid22srk.chatfloat.data.TelegramBotRepository
+import com.deivid22srk.chatfloat.data.toDomain
+import com.deivid22srk.chatfloat.data.toEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,7 +21,9 @@ import kotlinx.coroutines.launch
 
 class ChatViewModel : ViewModel() {
 
-    private val repo = TelegramBotRepository()
+    private lateinit var repo: TelegramBotRepository
+    private lateinit var db: ChatFloatDatabase
+    private lateinit var accountManager: AccountManager
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -26,38 +34,45 @@ class ChatViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private val _username = MutableStateFlow("")
-    val username: StateFlow<String> = _username.asStateFlow()
-
-    private var prefs: SharedPreferences? = null
     private var pollingJob: Job? = null
+    private var observerJob: Job? = null
 
-    fun init(context: Context) {
-        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        _username.value = prefs?.getString(KEY_USERNAME, "") ?: ""
-    }
+    fun init(context: Context, repository: TelegramBotRepository) {
+        repo = repository
+        db = ChatFloatDatabase.get(context)
+        accountManager = AccountManager(context)
 
-    fun setUsername(name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return
-        prefs?.edit()?.putString(KEY_USERNAME, trimmed)?.apply()
-        _username.value = trimmed
+        // Start observing the Room database for changes
+        observerJob = viewModelScope.launch {
+            db.messageDao().observeAll().collect { entities ->
+                // Enrich each message with the avatar from known_accounts cache
+                val enriched = entities.map { e ->
+                    val avatar = e.senderToken?.let { token ->
+                        db.knownAccountDao().findByToken(token)?.avatarBase64
+                    } ?: e.senderAvatar
+                    e.copy(senderAvatar = avatar).toDomain()
+                }
+                _messages.value = enriched
+            }
+        }
     }
 
     fun send(text: String) {
         if (text.isBlank()) return
-        val uname = _username.value
-        if (uname.isEmpty()) {
-            _error.value = "Configure seu nome de usuário primeiro"
+        val token = accountManager.getToken() ?: run {
+            _error.value = "Conta não configurada"
+            return
+        }
+        val username = accountManager.getUsername() ?: run {
+            _error.value = "Conta não configurada"
             return
         }
         viewModelScope.launch {
             _sending.value = true
             runCatching {
-                val msg = repo.sendMessage(text.trim(), uname)
-                // Add the sent message to the local list immediately.
-                // (The bot does NOT receive its own outgoing messages via getUpdates.)
-                _messages.value = _messages.value + msg
+                val msg = repo.sendMessage(text.trim(), token, username)
+                // Persist the outgoing message locally
+                db.messageDao().insert(msg.toEntity())
             }.onFailure { _error.value = it.message }
             _sending.value = false
         }
@@ -68,17 +83,20 @@ class ChatViewModel : ViewModel() {
         pollingJob = viewModelScope.launch {
             while (true) {
                 runCatching {
-                    val incoming = repo.getUpdates()
-                    if (incoming.isNotEmpty()) {
-                        // Append new messages, avoiding duplicates by id
-                        val existingIds = _messages.value.map { it.id }.toHashSet()
-                        val newOnes = incoming.filter { it.id !in existingIds }
+                    val batch = repo.getUpdates()
+                    // 1. Persist envelopes (account registrations / avatar updates)
+                    for (env in batch.envelopes) {
+                        applyEnvelope(env)
+                    }
+                    // 2. Persist incoming chat messages
+                    if (batch.messages.isNotEmpty()) {
+                        val existingIds = db.messageDao().getAll().map { it.id }.toHashSet()
+                        val newOnes = batch.messages.filter { it.id !in existingIds }
                         if (newOnes.isNotEmpty()) {
-                            _messages.value = _messages.value + newOnes
+                            db.messageDao().insertAll(newOnes.map { it.toEntity() })
                         }
                     }
                 }.onFailure { _error.value = it.message }
-                // Small pause between polls to avoid hammering the API
                 delay(1_000)
             }
         }
@@ -89,15 +107,33 @@ class ChatViewModel : ViewModel() {
         pollingJob = null
     }
 
+    private suspend fun applyEnvelope(env: AccountEnvelope) {
+        val now = System.currentTimeMillis()
+        when (env.type) {
+            "REGISTER" -> {
+                val existing = db.knownAccountDao().findByToken(env.token)
+                val entity = KnownAccountEntity(
+                    token = env.token,
+                    username = env.username ?: existing?.username ?: "user-${env.token.take(4)}",
+                    avatarBase64 = env.avatarBase64 ?: existing?.avatarBase64,
+                    firstSeen = existing?.firstSeen ?: now
+                )
+                db.knownAccountDao().upsert(entity)
+            }
+            "AVATAR" -> {
+                val existing = db.knownAccountDao().findByToken(env.token) ?: return
+                db.knownAccountDao().upsert(
+                    existing.copy(avatarBase64 = env.avatarBase64)
+                )
+            }
+        }
+    }
+
     fun clearError() { _error.value = null }
 
     override fun onCleared() {
         super.onCleared()
         stopPolling()
-    }
-
-    companion object {
-        private const val PREFS_NAME = "chatfloat_prefs"
-        private const val KEY_USERNAME = "local_username"
+        observerJob?.cancel()
     }
 }

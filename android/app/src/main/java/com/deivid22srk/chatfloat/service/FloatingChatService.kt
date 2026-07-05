@@ -30,15 +30,17 @@ import androidx.core.app.NotificationCompat
 import com.deivid22srk.chatfloat.ChatFloatApplication
 import com.deivid22srk.chatfloat.MainActivity
 import com.deivid22srk.chatfloat.R
-import com.deivid22srk.chatfloat.data.ChatMessage
+import com.deivid22srk.chatfloat.data.AccountManager
+import com.deivid22srk.chatfloat.data.ChatFloatDatabase
 import com.deivid22srk.chatfloat.data.TelegramBotRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
 
 /**
  * Foreground service that shows a floating chat overlay above other apps.
@@ -50,20 +52,23 @@ import kotlinx.coroutines.launch
  *   - An input row with EditText + Send button
  *
  * Messages are sent and received via the Telegram Bot API (long polling on
- * getUpdates). The local username is read from SharedPreferences.
+ * getUpdates). The local token + username are read from AccountManager.
+ * Messages are persisted in Room database so they survive service restarts.
  */
 class FloatingChatService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var rootView: View? = null
     private var telegramRepo: TelegramBotRepository? = null
+    private var accountManager: AccountManager? = null
+    private var db: ChatFloatDatabase? = null
+
+    private var localToken: String = ""
     private var localUsername: String = ""
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var pollingJob: Job? = null
-
-    private val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
-    private var lastUpdateId = 0L
+    private var observerJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -71,9 +76,10 @@ class FloatingChatService : Service() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         telegramRepo = TelegramBotRepository()
-        // Read the local username from SharedPreferences
-        val prefs = getSharedPreferences("chatfloat_prefs", Context.MODE_PRIVATE)
-        localUsername = prefs.getString("local_username", "") ?: ""
+        accountManager = AccountManager(this)
+        db = ChatFloatDatabase.get(this)
+        localToken = accountManager?.getToken().orEmpty()
+        localUsername = accountManager?.getUsername().orEmpty()
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
@@ -132,8 +138,8 @@ class FloatingChatService : Service() {
             setTextColor(Color.parseColor("#1F1F2E"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            text = if (localUsername.isEmpty()) {
-                "Configure seu nome de usuário no app primeiro."
+            text = if (localToken.isEmpty()) {
+                "Crie uma conta no app primeiro."
             } else {
                 "Aguardando mensagens…"
             }
@@ -244,7 +250,7 @@ class FloatingChatService : Service() {
         // === Send ===
         btnSend.setOnClickListener {
             val text = input.text?.toString().orEmpty()
-            if (text.isBlank() || localUsername.isEmpty()) return@setOnClickListener
+            if (text.isBlank() || localToken.isEmpty()) return@setOnClickListener
             input.text?.clear()
             input.clearFocus()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
@@ -252,9 +258,19 @@ class FloatingChatService : Service() {
 
             scope.launch {
                 runCatching {
-                    val msg = telegramRepo?.sendMessage(text.trim(), localUsername)
+                    val msg = telegramRepo?.sendMessage(text.trim(), localToken, localUsername)
                     if (msg != null) {
-                        messages.value = messages.value + msg
+                        db?.messageDao()?.insert(
+                            com.deivid22srk.chatfloat.data.MessageEntity(
+                                id = msg.id,
+                                text = msg.text,
+                                senderName = msg.senderName,
+                                senderToken = msg.senderToken,
+                                senderAvatar = msg.senderAvatar,
+                                timestamp = msg.timestamp,
+                                isOutgoing = true
+                            )
+                        )
                     }
                 }
             }
@@ -264,37 +280,34 @@ class FloatingChatService : Service() {
         windowManager.addView(root, params)
         rootView = root
 
-        // === Observe message list ===
-        scope.launch {
-            messages.collect { list ->
-                if (list.isEmpty()) {
-                    messagesText.text = if (localUsername.isEmpty()) {
-                        "Configure seu nome de usuário no app primeiro."
+        // === Observe Room messages ===
+        observerJob = scope.launch {
+            db?.messageDao()?.observeAll()?.collect { entities ->
+                if (entities.isEmpty()) {
+                    messagesText.text = if (localToken.isEmpty()) {
+                        "Crie uma conta no app primeiro."
                     } else {
                         "Aguardando mensagens…"
                     }
                 } else {
                     val sb = SpannableStringBuilder()
-                    list.takeLast(50).forEach { msg ->
-                        if (msg.isOutgoing) {
+                    entities.takeLast(50).forEach { e ->
+                        if (e.isOutgoing) {
+                            val s = sb.length
                             sb.append("Você: ")
                             sb.setSpan(
                                 StyleSpan(android.graphics.Typeface.BOLD),
-                                sb.length - "Você: ".length,
-                                sb.length,
-                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                             )
                         } else {
-                            val nameStart = sb.length
-                            sb.append(msg.senderName + ": ")
+                            val s = sb.length
+                            sb.append("${e.senderName}: ")
                             sb.setSpan(
                                 StyleSpan(android.graphics.Typeface.BOLD),
-                                nameStart,
-                                sb.length,
-                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                             )
                         }
-                        sb.append(msg.text)
+                        sb.append(e.text)
                         sb.append("\n\n")
                     }
                     messagesText.text = sb
@@ -306,16 +319,58 @@ class FloatingChatService : Service() {
 
     private fun startPolling() {
         if (pollingJob != null) return
-        if (localUsername.isEmpty()) return
+        if (localToken.isEmpty()) return
         pollingJob = scope.launch {
             while (true) {
                 runCatching {
-                    val incoming = telegramRepo?.getUpdates().orEmpty()
-                    if (incoming.isNotEmpty()) {
-                        val existingIds = messages.value.map { it.id }.toHashSet()
-                        val newOnes = incoming.filter { it.id !in existingIds }
+                    val batch = telegramRepo?.getUpdates() ?: return@runCatching
+                    val database = db ?: return@runCatching
+
+                    // Apply envelopes
+                    for (env in batch.envelopes) {
+                        when (env.type) {
+                            "REGISTER" -> {
+                                val existing = database.knownAccountDao().findByToken(env.token)
+                                database.knownAccountDao().upsert(
+                                    com.deivid22srk.chatfloat.data.KnownAccountEntity(
+                                        token = env.token,
+                                        username = env.username
+                                            ?: existing?.username
+                                            ?: "user-${env.token.take(4)}",
+                                        avatarBase64 = env.avatarBase64 ?: existing?.avatarBase64,
+                                        firstSeen = existing?.firstSeen
+                                            ?: System.currentTimeMillis()
+                                    )
+                                )
+                            }
+                            "AVATAR" -> {
+                                val existing = database.knownAccountDao().findByToken(env.token)
+                                    ?: continue
+                                database.knownAccountDao().upsert(
+                                    existing.copy(avatarBase64 = env.avatarBase64)
+                                )
+                            }
+                        }
+                    }
+
+                    // Persist incoming chat messages
+                    if (batch.messages.isNotEmpty()) {
+                        val existingIds = database.messageDao().getAll().map { it.id }.toHashSet()
+                        val newOnes = batch.messages.filter { it.id !in existingIds }
                         if (newOnes.isNotEmpty()) {
-                            messages.value = messages.value + newOnes
+                            database.messageDao().insertAll(
+                                newOnes.map {
+                                    com.deivid22srk.chatfloat.data.MessageEntity(
+                                        id = it.id,
+                                        text = it.text,
+                                        senderName = it.senderName,
+                                        senderToken = it.senderToken,
+                                        senderAvatar = it.senderAvatar,
+                                        timestamp = it.timestamp,
+                                        isOutgoing = it.isOutgoing
+                                    )
+                                }
+                            )
                         }
                     }
                 }
@@ -347,6 +402,8 @@ class FloatingChatService : Service() {
         super.onDestroy()
         pollingJob?.cancel()
         pollingJob = null
+        observerJob?.cancel()
+        observerJob = null
         rootView?.let {
             runCatching { windowManager.removeView(it) }
         }
