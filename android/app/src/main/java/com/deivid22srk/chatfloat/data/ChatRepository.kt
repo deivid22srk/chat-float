@@ -94,5 +94,5 @@ class ChatRepository {
 
     /** Returns a [RealtimeChannel] that must be subscribed + collected by the caller. */
     fun messagesChannel(): RealtimeChannel =
-        client.realtime.channel("public:messages")
+        client.realtime.channel("public:messages") { }
 }

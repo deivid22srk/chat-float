@@ -72,8 +72,11 @@ class ChatViewModel : ViewModel() {
     fun stopRealtime() {
         realtimeJob?.cancel()
         realtimeJob = null
-        channel?.let {
-            runCatching { it.unsubscribe() }
+        channel?.let { ch ->
+            // unsubscribe() is suspend — fire-and-forget on viewModelScope
+            viewModelScope.launch {
+                runCatching { ch.unsubscribe() }
+            }
         }
         channel = null
     }

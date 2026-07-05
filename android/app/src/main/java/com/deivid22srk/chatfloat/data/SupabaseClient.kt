@@ -21,7 +21,8 @@ object SupabaseClient {
             install(Auth)
             install(Postgrest)
             install(Realtime)
-            httpEngine(CIO)
+            // Use the CIO Ktor engine (no native dependencies, works on Android)
+            engine(CIO)
         }
     }
 
