@@ -22,6 +22,9 @@ class AuthViewModel : ViewModel() {
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
+    private val _isSaving = MutableStateFlow(false)
+    val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
+
     private val _newlyCreatedToken = MutableStateFlow<String?>(null)
     val newlyCreatedToken: StateFlow<String?> = _newlyCreatedToken.asStateFlow()
 
@@ -93,15 +96,6 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    fun updateUsername(newUsername: String) {
-        val state = _state.value as? AuthState.Authenticated ?: return
-        if (newUsername.isBlank()) return
-        viewModelScope.launch {
-            GoBridge.updateUsername(newUsername.trim())
-            refreshState()
-        }
-    }
-
     fun updateAvatar(avatarBase64: String?) {
         val state = _state.value as? AuthState.Authenticated ?: return
         viewModelScope.launch {
@@ -110,12 +104,34 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    /** Uploads raw PNG bytes to Supabase Storage. Pass null/empty to remove. */
+    /** Uploads raw PNG bytes to Supabase Storage. Pass null/empty to remove.
+     *  Sets isSaving=true during the operation, false after. Shows errors in _error. */
     fun updateAvatarBytes(pngBytes: ByteArray?) {
         val state = _state.value as? AuthState.Authenticated ?: return
         viewModelScope.launch {
+            _isSaving.value = true
+            _error.value = null
             GoBridge.updateAvatarBytes(pngBytes)
-            refreshState()
+                .onSuccess {
+                    refreshState()
+                }
+                .onFailure {
+                    _error.value = it.message ?: "Falha ao salvar foto"
+                }
+            _isSaving.value = false
+        }
+    }
+
+    fun updateUsername(newUsername: String) {
+        val state = _state.value as? AuthState.Authenticated ?: return
+        if (newUsername.isBlank()) return
+        viewModelScope.launch {
+            _isSaving.value = true
+            _error.value = null
+            GoBridge.updateUsername(newUsername.trim())
+                .onSuccess { refreshState() }
+                .onFailure { _error.value = it.message ?: "Falha ao salvar nome" }
+            _isSaving.value = false
         }
     }
 

@@ -28,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +72,8 @@ fun SettingsScreen(
     val context = LocalContext.current
     val state by authVm.state.collectAsState()
     val authedState = state as? AuthViewModel.AuthState.Authenticated ?: return
+    val isSaving by authVm.isSaving.collectAsState()
+    val errorMsg by authVm.error.collectAsState()
 
     var usernameDraft by remember(authedState.username) {
         mutableStateOf(authedState.username)
@@ -77,7 +81,6 @@ fun SettingsScreen(
     // Local draft of the new avatar PNG bytes (null = no change / use existing URL)
     var pendingAvatarBytes by remember { mutableStateOf<ByteArray?>(null) }
     var removeAvatar by remember { mutableStateOf(false) }
-    var isUploading by remember { mutableStateOf(false) }
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -236,28 +239,40 @@ fun SettingsScreen(
                     pendingAvatarBytes != null ||
                     (removeAvatar && authedState.avatarUrl != null))
 
+            // Show error if any
+            errorMsg?.let { err ->
+                Text(
+                    text = err,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                )
+            }
+
             Button(
                 onClick = {
                     if (usernameDraft.isNotBlank()) {
-                        isUploading = true
+                        // The AuthViewModel sets isSaving=true during the async
+                        // upload. We DON'T clear pendingAvatarBytes here — we
+                        // wait for the LaunchedEffect below to detect when
+                        // isSaving goes false AND the avatarUrl has been
+                        // updated in authedState.
                         if (usernameDraft != authedState.username) {
                             authVm.updateUsername(usernameDraft.trim())
                         }
                         when {
                             pendingAvatarBytes != null -> {
                                 authVm.updateAvatarBytes(pendingAvatarBytes)
-                                pendingAvatarBytes = null
-                                removeAvatar = false
                             }
                             removeAvatar -> {
                                 authVm.updateAvatarBytes(null)
-                                removeAvatar = false
                             }
                         }
-                        isUploading = false
                     }
                 },
-                enabled = hasChanges && !isUploading,
+                enabled = hasChanges && !isSaving,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
@@ -265,7 +280,31 @@ fun SettingsScreen(
                     containerColor = MaterialTheme.colorScheme.primary
                 )
             ) {
-                Text(if (isUploading) "Enviando…" else "Salvar alterações")
+                if (isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text("Enviando…")
+                } else {
+                    Text("Salvar alterações")
+                }
+            }
+
+            // When isSaving transitions from true→false, the save completed.
+            // Now we can safely clear the local pending state — the authedState
+            // has been refreshed by the AuthViewModel and will show the new
+            // avatarUrl (or empty if removed).
+            var previousSaving by remember { mutableStateOf(false) }
+            LaunchedEffect(isSaving) {
+                if (previousSaving && !isSaving) {
+                    // Save just finished — clear local pending state
+                    pendingAvatarBytes = null
+                    removeAvatar = false
+                }
+                previousSaving = isSaving
             }
 
             Spacer(Modifier.height(32.dp))
