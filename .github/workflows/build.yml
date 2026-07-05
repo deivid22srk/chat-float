@@ -78,34 +78,13 @@ jobs:
         working-directory: android
         run: |
           mkdir -p ~/.gradle/init.d
-          printf '%s\n' \
-            '//' \
-            '// CI-injected: enables R8 minification, resource shrinking,' \
-            '// and per-ABI APK splits WITHOUT modifying the app build.gradle.kts.' \
-            '//' \
-            'beforeProject {' \
-            '    if (name == "app") {' \
-            '        pluginManager.withPlugin("com.android.application") {' \
-            '            extensions.configure<com.android.build.api.dsl.ApplicationExtension>("android") {' \
-            '                buildTypes.named("release") {' \
-            '                    isMinifyEnabled = true' \
-            '                    isShrinkResources = true' \
-            '                }' \
-            '                splits {' \
-            '                    abi {' \
-            '                        isEnable = true' \
-            '                        reset()' \
-            '                        include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")' \
-            '                        isUniversalApk = false' \
-            '                    }' \
-            '                }' \
-            '            }' \
-            '        }' \
-            '    }' \
-            '}' \
-            > ~/.gradle/init.d/optimizations.gradle.kts
-          echo "--- Init script created at ~/.gradle/init.d/optimizations.gradle.kts ---"
-          cat ~/.gradle/init.d/optimizations.gradle.kts
+          # Groovy init script (not Kotlin) so we can duck-type the Android
+          # extension without depending on the AGP classpath at compile time.
+          # Encoded as base64 to avoid YAML indentation / shell escaping issues.
+          echo 'Ly8gQ0ktaW5qZWN0ZWQ6IGVuYWJsZXMgUjggbWluaWZpY2F0aW9uLCByZXNvdXJjZSBzaHJpbmtpbmcsIGFuZCBwZXItQUJJIEFQSyBzcGxpdHMKLy8gV0lUSE9VVCBtb2RpZnlpbmcgdGhlIGFwcCdzIGJ1aWxkLmdyYWRsZS5rdHMgc291cmNlIGZpbGUuCmFsbHByb2plY3RzIHsgcHJvamVjdCAtPgogICAgaWYgKHByb2plY3QubmFtZSA9PSAiYXBwIikgewogICAgICAgIHByb2plY3QucGx1Z2luTWFuYWdlci53aXRoUGx1Z2luKCJjb20uYW5kcm9pZC5hcHBsaWNhdGlvbiIpIHsKICAgICAgICAgICAgcHJvamVjdC5hbmRyb2lkIHsKICAgICAgICAgICAgICAgIGJ1aWxkVHlwZXMgewogICAgICAgICAgICAgICAgICAgIHJlbGVhc2UgewogICAgICAgICAgICAgICAgICAgICAgICBtaW5pZnlFbmFibGVkIHRydWUKICAgICAgICAgICAgICAgICAgICAgICAgc2hyaW5rUmVzb3VyY2VzIHRydWUKICAgICAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICBzcGxpdHMgewogICAgICAgICAgICAgICAgICAgIGFiaSB7CiAgICAgICAgICAgICAgICAgICAgICAgIGVuYWJsZSB0cnVlCiAgICAgICAgICAgICAgICAgICAgICAgIHJlc2V0KCkKICAgICAgICAgICAgICAgICAgICAgICAgaW5jbHVkZSAiYXJtZWFiaS12N2EiLCAiYXJtNjQtdjhhIiwgIng4NiIsICJ4ODZfNjQiCiAgICAgICAgICAgICAgICAgICAgICAgIHVuaXZlcnNhbEFwayBmYWxzZQogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgfQogICAgICAgIH0KICAgIH0KfQo=' \
+            | base64 -d > ~/.gradle/init.d/optimizations.gradle
+          echo "--- Init script created at ~/.gradle/init.d/optimizations.gradle ---"
+          cat ~/.gradle/init.d/optimizations.gradle
 
       - name: Build release APKs (with R8 + resource shrinking + ABI splits)
         working-directory: android
