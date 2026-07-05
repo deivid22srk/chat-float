@@ -107,7 +107,7 @@ fun AppRoot() {
                         ChatScreen(
                             viewModel = chatVm,
                             username = s.username,
-                            avatarBase64 = s.avatarBase64,
+                            avatarUrl = s.avatarUrl,
                             onOpenSettings = { screen = Screen.Settings }
                         )
                     }

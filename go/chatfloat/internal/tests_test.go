@@ -6,6 +6,7 @@ package chatfloat
 // Run with: go test -v -tags integration -timeout 60s ./...
 
 import (
+	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
@@ -169,16 +170,30 @@ func TestIntegration_UpdateUsernameAndAvatar(t *testing.T) {
 	}
 	t.Logf("Username updated to: %s", acc.Username)
 
-	// Update avatar (tiny 1x1 PNG, base64)
-	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
-	if err := UpdateAvatarAPI(png); err != nil {
+	// Update avatar (tiny 1x1 PNG, raw bytes)
+	pngBase64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+	pngBytes, err := base64.StdEncoding.DecodeString(pngBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAvatarAPI(pngBytes); err != nil {
 		t.Fatalf("UpdateAvatarAPI: %v", err)
 	}
 	acc = GetAccountAPI()
-	if acc == nil || acc.AvatarBase64 != png {
-		t.Errorf("avatar not updated: %+v", acc)
+	if acc == nil || acc.AvatarURL == "" {
+		t.Errorf("avatar URL not set after upload: %+v", acc)
+	} else {
+		t.Logf("Avatar uploaded, URL: %s", acc.AvatarURL)
 	}
-	t.Log("Avatar updated OK")
+
+	// Remove avatar
+	if err := UpdateAvatarAPI(nil); err != nil {
+		t.Fatalf("UpdateAvatarAPI(nil): %v", err)
+	}
+	acc = GetAccountAPI()
+	if acc == nil || acc.AvatarURL != "" {
+		t.Errorf("avatar URL should be empty after removal: %+v", acc)
+	}
 
 	_ = LogoutAPI()
 }

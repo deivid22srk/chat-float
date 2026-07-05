@@ -20,6 +20,7 @@ extern char* IsLoggedIn(void);
 extern char* GetAccount(void);
 extern char* UpdateUsername(char* newUsername);
 extern char* UpdateAvatar(char* avatarBase64);
+extern char* UpdateAvatarBytes(char* data, int length);
 extern char* SendMessage(char* text);
 extern char* GetMessages(void);
 extern char* Logout(void);
@@ -112,6 +113,27 @@ Java_com_deivid22srk_chatfloat_data_GoBridge_UpdateAvatar(
     char* a0 = jstr_to_cstr(env, p0);
     char* r = UpdateAvatar(a0);
     free_cstr(a0);
+    return cstr_to_jstr(env, r);
+}
+
+// UpdateAvatarBytes takes a jbyteArray (raw PNG bytes) and passes them
+// to the Go UpdateAvatarBytes export.
+JNIEXPORT jstring JNICALL
+Java_com_deivid22srk_chatfloat_data_GoBridge_UpdateAvatarBytes(
+    JNIEnv* env, jobject thiz, jbyteArray bytes
+) {
+    if (bytes == NULL || (*env)->GetArrayLength(env, bytes) == 0) {
+        char* r = UpdateAvatarBytes(NULL, 0);
+        return cstr_to_jstr(env, r);
+    }
+    jsize len = (*env)->GetArrayLength(env, bytes);
+    jbyte* data = (*env)->GetByteArrayElements(env, bytes, NULL);
+    if (data == NULL) {
+        char* r = UpdateAvatarBytes(NULL, 0);
+        return cstr_to_jstr(env, r);
+    }
+    char* r = UpdateAvatarBytes((char*)data, (int)len);
+    (*env)->ReleaseByteArrayElements(env, bytes, data, JNI_ABORT);
     return cstr_to_jstr(env, r);
 }
 

@@ -64,8 +64,11 @@ object GoBridge {
     /** UpdateUsername(newUsername) -> json */
     private external fun UpdateUsername(newUsername: String): String
 
-    /** UpdateAvatar(avatarBase64) -> json */
+    /** UpdateAvatar(avatarBase64) -> json (legacy: base64 string) */
     private external fun UpdateAvatar(avatarBase64: String): String
+
+    /** UpdateAvatarBytes(pngBytes) -> json (preferred: raw PNG bytes) */
+    private external fun UpdateAvatarBytes(pngBytes: ByteArray): String
 
     /** SendMessage(text) -> json */
     private external fun SendMessage(text: String): String
@@ -128,7 +131,8 @@ object GoBridge {
             Account(
                 token = token,
                 username = result["username"]?.jsonPrimitive?.contentOrNull ?: "",
-                avatarBase64 = result["avatar_base64"]?.jsonPrimitive?.contentOrNull
+                avatarBase64 = result["avatar_base64"]?.jsonPrimitive?.contentOrNull,
+                avatarUrl = result["avatar_url"]?.jsonPrimitive?.contentOrNull
             )
         }.getOrNull()
     }
@@ -141,6 +145,20 @@ object GoBridge {
             }
         }
 
+    /** Uploads raw PNG bytes to Supabase Storage and stores the public URL. */
+    suspend fun updateAvatarBytes(pngBytes: ByteArray?): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val resp = if (pngBytes == null || pngBytes.isEmpty()) {
+                    call { UpdateAvatarBytes(ByteArray(0)) }
+                } else {
+                    call { UpdateAvatarBytes(pngBytes) }
+                }
+                if (!resp.ok) throw RuntimeException(resp.error)
+            }
+        }
+
+    /** Legacy: accepts base64-encoded PNG. Decoded and forwarded to updateAvatarBytes. */
     suspend fun updateAvatar(avatarBase64: String?): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {

@@ -14,109 +14,133 @@ package main
 import "C"
 
 import (
-	"encoding/json"
-	"unsafe"
+        "encoding/base64"
+        "encoding/json"
+        "unsafe"
 
-	"chatfloat/chatfloat/internal"
+        "chatfloat/chatfloat/internal"
 )
 
 type APIResponse struct {
-	OK     bool        `json:"ok"`
-	Result interface{} `json:"result,omitempty"`
-	Error  string      `json:"error,omitempty"`
+        OK     bool        `json:"ok"`
+        Result interface{} `json:"result,omitempty"`
+        Error  string      `json:"error,omitempty"`
 }
 
 //export Configure
 func Configure(supabaseURL, supabaseKey, dataDir *C.char) *C.char {
-	cfg := chatfloat.Config{
-		SupabaseURL: C.GoString(supabaseURL),
-		SupabaseKey: C.GoString(supabaseKey),
-		DataDir:     C.GoString(dataDir),
-	}
-	err := chatfloat.ConfigureAPI(cfg)
-	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+        cfg := chatfloat.Config{
+                SupabaseURL: C.GoString(supabaseURL),
+                SupabaseKey: C.GoString(supabaseKey),
+                DataDir:     C.GoString(dataDir),
+        }
+        err := chatfloat.ConfigureAPI(cfg)
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
 //export CreateAccount
 func CreateAccount(username *C.char) *C.char {
-	token, err := chatfloat.CreateAccountAPI(C.GoString(username))
-	if err != nil {
-		return jsonResp(APIResponse{OK: false, Error: errString(err)})
-	}
-	return jsonResp(APIResponse{OK: true, Result: map[string]string{"token": token}})
+        token, err := chatfloat.CreateAccountAPI(C.GoString(username))
+        if err != nil {
+                return jsonResp(APIResponse{OK: false, Error: errString(err)})
+        }
+        return jsonResp(APIResponse{OK: true, Result: map[string]string{"token": token}})
 }
 
 //export LoginWithToken
 func LoginWithToken(token *C.char) *C.char {
-	err := chatfloat.LoginWithTokenAPI(C.GoString(token))
-	if err != nil {
-		return jsonResp(APIResponse{OK: false, Error: errString(err)})
-	}
-	return jsonResp(APIResponse{OK: true})
+        err := chatfloat.LoginWithTokenAPI(C.GoString(token))
+        if err != nil {
+                return jsonResp(APIResponse{OK: false, Error: errString(err)})
+        }
+        return jsonResp(APIResponse{OK: true})
 }
 
 //export IsLoggedIn
 func IsLoggedIn() *C.char {
-	return jsonResp(APIResponse{
-		OK:     true,
-		Result: map[string]bool{"logged_in": chatfloat.IsLoggedInAPI()},
-	})
+        return jsonResp(APIResponse{
+                OK:     true,
+                Result: map[string]bool{"logged_in": chatfloat.IsLoggedInAPI()},
+        })
 }
 
 //export GetAccount
 func GetAccount() *C.char {
-	acc := chatfloat.GetAccountAPI()
-	return jsonResp(APIResponse{OK: true, Result: acc})
+        acc := chatfloat.GetAccountAPI()
+        return jsonResp(APIResponse{OK: true, Result: acc})
 }
 
 //export UpdateUsername
 func UpdateUsername(newUsername *C.char) *C.char {
-	err := chatfloat.UpdateUsernameAPI(C.GoString(newUsername))
-	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+        err := chatfloat.UpdateUsernameAPI(C.GoString(newUsername))
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
 //export UpdateAvatar
 func UpdateAvatar(avatarBase64 *C.char) *C.char {
-	err := chatfloat.UpdateAvatarAPI(C.GoString(avatarBase64))
-	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+        // Legacy: base64 string. Decode to bytes, then call UpdateAvatarAPI.
+        encoded := C.GoString(avatarBase64)
+        var pngBytes []byte
+        if encoded != "" {
+                decoded, err := base64.StdEncoding.DecodeString(encoded)
+                if err != nil {
+                        return jsonResp(APIResponse{OK: false, Error: "invalid base64: " + err.Error()})
+                }
+                pngBytes = decoded
+        }
+        err := chatfloat.UpdateAvatarAPI(pngBytes)
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+}
+
+//export UpdateAvatarBytes
+func UpdateAvatarBytes(data *C.char, length C.int) *C.char {
+        // New API: raw PNG bytes + length. More efficient than base64.
+        if data == nil || length <= 0 {
+                err := chatfloat.UpdateAvatarAPI(nil)
+                return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+        }
+        // Copy the bytes from C memory into a Go slice
+        pngBytes := C.GoBytes(unsafe.Pointer(data), length)
+        err := chatfloat.UpdateAvatarAPI(pngBytes)
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
 //export SendMessage
 func SendMessage(text *C.char) *C.char {
-	err := chatfloat.SendMessageAPI(C.GoString(text))
-	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+        err := chatfloat.SendMessageAPI(C.GoString(text))
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
 //export GetMessages
 func GetMessages() *C.char {
-	msgs, err := chatfloat.GetMessagesAPI()
-	if err != nil {
-		return jsonResp(APIResponse{OK: false, Error: errString(err)})
-	}
-	return jsonResp(APIResponse{OK: true, Result: map[string]interface{}{"messages": msgs}})
+        msgs, err := chatfloat.GetMessagesAPI()
+        if err != nil {
+                return jsonResp(APIResponse{OK: false, Error: errString(err)})
+        }
+        return jsonResp(APIResponse{OK: true, Result: map[string]interface{}{"messages": msgs}})
 }
 
 //export Logout
 func Logout() *C.char {
-	err := chatfloat.LogoutAPI()
-	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+        err := chatfloat.LogoutAPI()
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
 //export FreeString
 func FreeString(s *C.char) {
-	C.free(unsafe.Pointer(s))
+        C.free(unsafe.Pointer(s))
 }
 
 func main() {}
 
 func jsonResp(r APIResponse) *C.char {
-	data, _ := json.Marshal(r)
-	return C.CString(string(data))
+        data, _ := json.Marshal(r)
+        return C.CString(string(data))
 }
 
 func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
+        if err == nil {
+                return ""
+        }
+        return err.Error()
 }

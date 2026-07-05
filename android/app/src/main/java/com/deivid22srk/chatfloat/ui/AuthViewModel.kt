@@ -46,7 +46,8 @@ class AuthViewModel : ViewModel() {
                 _state.value = AuthState.Authenticated(
                     token = account.token,
                     username = account.username,
-                    avatarBase64 = account.avatarBase64
+                    avatarBase64 = account.avatarBase64,
+                    avatarUrl = account.avatarUrl
                 )
             } else {
                 _state.value = AuthState.Unauthenticated
@@ -109,6 +110,15 @@ class AuthViewModel : ViewModel() {
         }
     }
 
+    /** Uploads raw PNG bytes to Supabase Storage. Pass null/empty to remove. */
+    fun updateAvatarBytes(pngBytes: ByteArray?) {
+        val state = _state.value as? AuthState.Authenticated ?: return
+        viewModelScope.launch {
+            GoBridge.updateAvatarBytes(pngBytes)
+            refreshState()
+        }
+    }
+
     fun logout() {
         viewModelScope.launch {
             GoBridge.logout()
@@ -125,7 +135,8 @@ class AuthViewModel : ViewModel() {
         data class Authenticated(
             val token: String,
             val username: String,
-            val avatarBase64: String?
+            val avatarBase64: String?,
+            val avatarUrl: String?
         ) : AuthState()
     }
 }

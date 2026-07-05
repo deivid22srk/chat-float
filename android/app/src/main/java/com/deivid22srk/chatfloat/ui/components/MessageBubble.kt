@@ -19,6 +19,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,15 +34,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deivid22srk.chatfloat.data.ChatMessage
+import com.deivid22srk.chatfloat.ui.theme.BrandPrimary
 import com.deivid22srk.chatfloat.ui.theme.BubbleIncoming
 import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoing
+import java.net.HttpURLConnection
+import java.net.URL
 
 @Composable
 fun MessageBubble(message: ChatMessage) {
     val isOutgoing = message.isOutgoing
     val alignment = if (isOutgoing) Alignment.End else Alignment.Start
     val bubbleColor = if (isOutgoing) BubbleOutgoing else BubbleIncoming
-    val textColor = if (isOutgoing) Color.White else MaterialTheme.colorScheme.onSurface
+    // Use explicit colors so they don't depend on the system dark/light theme
+    // (the dark theme's onSurface is light gray, which is invisible on the
+    // light BubbleIncoming background).
+    val textColor = if (isOutgoing) Color.White else Color(0xFF1F1F2E)
+    val senderColor = if (isOutgoing) Color.White else BrandPrimary
 
     Row(
         modifier = Modifier
@@ -48,7 +60,8 @@ fun MessageBubble(message: ChatMessage) {
         // Avatar (only for incoming)
         if (!isOutgoing) {
             Avatar(
-                base64 = message.senderAvatar,
+                url = message.senderAvatar,
+                base64 = null,
                 initials = message.senderName.take(2).uppercase(),
                 size = 32
             )
@@ -60,7 +73,7 @@ fun MessageBubble(message: ChatMessage) {
                 Text(
                     text = message.senderName,
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = senderColor,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
                 )
@@ -91,28 +104,49 @@ fun MessageBubble(message: ChatMessage) {
     }
 }
 
+/**
+ * Avatar composable. Tries to load from [url] first (Supabase Storage URL),
+ * falls back to [base64] if [url] is null, then falls back to initials.
+ *
+ * The URL is fetched on a background thread and decoded off the main thread.
+ */
 @Composable
-fun Avatar(base64: String?, initials: String, size: Int) {
+fun Avatar(url: String?, base64: String?, initials: String, size: Int) {
     val modifier = Modifier
         .size(size.dp)
         .clip(CircleShape)
         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
 
-    if (base64 != null) {
-        val bmp = runCatching {
+    // State holding the loaded bitmap (from URL or base64)
+    var loadedBitmap by remember(url, base64) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    // Try base64 first (synchronous, fast)
+    if (loadedBitmap == null && base64 != null) {
+        loadedBitmap = runCatching {
             val bytes = Base64.decode(base64, Base64.NO_WRAP)
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         }.getOrNull()
-        if (bmp != null) {
-            Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = "Avatar",
-                modifier = modifier,
-                contentScale = ContentScale.Crop
-            )
-            return
+    }
+
+    // Load from URL asynchronously
+    LaunchedEffect(url) {
+        if (loadedBitmap == null && url != null && url.isNotEmpty()) {
+            loadedBitmap = runCatching {
+                loadBitmapFromUrl(url)
+            }.getOrNull()
         }
     }
+
+    if (loadedBitmap != null) {
+        Image(
+            bitmap = loadedBitmap!!.asImageBitmap(),
+            contentDescription = "Avatar",
+            modifier = modifier,
+            contentScale = ContentScale.Crop
+        )
+        return
+    }
+
     // Fallback: show initials
     Box(
         modifier = modifier,
@@ -125,4 +159,17 @@ fun Avatar(base64: String?, initials: String, size: Int) {
             color = MaterialTheme.colorScheme.primary
         )
     }
+}
+
+/** Downloads and decodes a bitmap from a URL on the calling thread. */
+private fun loadBitmapFromUrl(urlString: String): android.graphics.Bitmap? {
+    return runCatching {
+        val conn = URL(urlString).openConnection() as HttpURLConnection
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
+        conn.requestMethod = "GET"
+        conn.inputStream.use { input ->
+            BitmapFactory.decodeStream(input)
+        }
+    }.getOrNull()
 }

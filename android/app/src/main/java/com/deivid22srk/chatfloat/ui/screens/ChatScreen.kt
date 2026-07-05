@@ -59,7 +59,7 @@ import com.deivid22srk.chatfloat.ui.components.MessageBubble
 fun ChatScreen(
     viewModel: ChatViewModel,
     username: String,
-    avatarBase64: String?,
+    avatarUrl: String?,
     onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
@@ -81,7 +81,8 @@ fun ChatScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Avatar(
-                            base64 = avatarBase64,
+                            url = avatarUrl,
+                            base64 = null,
                             initials = username.take(2).uppercase(),
                             size = 36
                         )
