@@ -78,41 +78,32 @@ jobs:
         working-directory: android
         run: |
           mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/optimizations.gradle.kts << 'EOF'
-          // CI-injected: enables R8 minification, resource shrinking,
-          # and per-ABI APK splits WITHOUT modifying the app's
-          # build.gradle.kts source file.
-          #
-          # This script runs before the project build scripts and hooks
-          # into the Android Application extension to flip flags on the
-          # release build type and add ABI splits.
-          beforeProject {
-              if (name == "app") {
-                  pluginManager.withPlugin("com.android.application") {
-                      extensions.configure<com.android.build.api.dsl.ApplicationExtension>("android") {
-                          buildTypes.named("release") {
-                              isMinifyEnabled = true
-                              isShrinkResources = true
-                          }
-                          // Generate one APK per ABI instead of a universal APK.
-                          // Each per-ABI APK is significantly smaller (~40-60% reduction
-                          # for arm64-v8a, which is what most modern phones use).
-                          splits {
-                              abi {
-                                  isEnable = true
-                                  // Reset and enable each ABI explicitly
-                                  reset()
-                                  include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-                                  // Set this to false to generate one APK per ABI
-                                  # (true would also produce a universal APK)
-                                  isUniversalApk = false
-                              }
-                          }
-                      }
-                  }
-              }
-          }
-          EOF
+          printf '%s\n' \
+            '//' \
+            '// CI-injected: enables R8 minification, resource shrinking,' \
+            '// and per-ABI APK splits WITHOUT modifying the app build.gradle.kts.' \
+            '//' \
+            'beforeProject {' \
+            '    if (name == "app") {' \
+            '        pluginManager.withPlugin("com.android.application") {' \
+            '            extensions.configure<com.android.build.api.dsl.ApplicationExtension>("android") {' \
+            '                buildTypes.named("release") {' \
+            '                    isMinifyEnabled = true' \
+            '                    isShrinkResources = true' \
+            '                }' \
+            '                splits {' \
+            '                    abi {' \
+            '                        isEnable = true' \
+            '                        reset()' \
+            '                        include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")' \
+            '                        isUniversalApk = false' \
+            '                    }' \
+            '                }' \
+            '            }' \
+            '        }' \
+            '    }' \
+            '}' \
+            > ~/.gradle/init.d/optimizations.gradle.kts
           echo "--- Init script created at ~/.gradle/init.d/optimizations.gradle.kts ---"
           cat ~/.gradle/init.d/optimizations.gradle.kts
 
