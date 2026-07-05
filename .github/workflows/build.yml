@@ -1,4 +1,4 @@
-name: Build Release APK (Optimized)
+name: Build Release APK (arm64-v8a, with Go backend)
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build & Sign Lightweight APKs
+    name: Build & Sign APK
     runs-on: ubuntu-latest
 
     steps:
@@ -23,10 +23,16 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: go/go.sum
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-35 build-tools;35.0.0'
+          packages: 'platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973'
 
       - name: Decode keystore
         working-directory: android
@@ -36,61 +42,44 @@ jobs:
           ls -la app/keystore/
 
       # ============================================================
-      # Optimization flags injected WITHOUT modifying app source.
-      #
-      # We append to gradle.properties (in the android/ root) so the
-      # build picks up R8 full mode + resource shrinking at build time.
-      # The app's build.gradle.kts already declares proguardFiles, so
-      # we just need to flip the flags via -P overrides at the gradle
-      # invocation below.
+      # 1. Run Go unit tests (no network needed)
       # ============================================================
-      - name: Enable R8 full mode and optimizations
-        working-directory: android
+      - name: Go unit tests
+        working-directory: go
         run: |
-          cat >> gradle.properties << 'EOF'
+          go test -v ./...
 
-          # === Injected by CI for lightweight builds ===
-          # Enable R8 full mode (more aggressive shrinking/optimization)
-          android.enableR8.fullMode=true
-          # Don't keep R8 history (faster, smaller)
-          android.enableR8.fullMode.history=false
-          EOF
-          echo "--- Updated gradle.properties ---"
-          cat gradle.properties
+      # ============================================================
+      # 2. Build the Go shared library (.so) for arm64-v8a.
+      #    This produces libchatfloat.so + libchatfloat.h.
+      #    We use go build -buildmode=c-shared (NOT gomobile) so we
+      #    have full Go capabilities including the standard library
+      #    and any third-party Go module.
+      # ============================================================
+      - name: Build Go shared library for arm64-v8a
+        working-directory: go
+        env:
+          NDK_TOOLCHAIN: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin
+        run: |
+          mkdir -p ../android/app/src/main/jniLibs/arm64-v8a
+          GOOS=android \
+          GOARCH=arm64 \
+          CGO_ENABLED=1 \
+          CC=$NDK_TOOLCHAIN/aarch64-linux-android24-clang \
+          go build \
+            -buildmode=c-shared \
+            -o ../android/app/src/main/jniLibs/arm64-v8a/libchatfloat.so \
+            ./chatfloat
+          ls -la ../android/app/src/main/jniLibs/arm64-v8a/
 
+      # ============================================================
+      # 3. Build the APK (arm64-v8a only, no minification)
+      # ============================================================
       - name: Grant execute permission for gradlew
         working-directory: android
         run: chmod +x ./gradlew
 
-      # ============================================================
-      # Build with ABI splits via Gradle properties.
-      #
-      # We use -P to override build types without editing build.gradle.kts:
-      #   -PminifyRelease=true        -> isMinifyEnabled = true
-      #   -PshrinkResourcesRelease=true-> isShrinkResources = true
-      #   -PsplitApks=true             -> enable per-ABI APKs
-      #
-      # Since these flags aren't read by the existing build.gradle.kts,
-      # we instead pass them as Gradle project properties and use the
-      # Gradle init script below to apply them to the Android extension.
-      # ============================================================
-      - name: Create Gradle init script to enable shrinking + ABI splits
-        working-directory: android
-        run: |
-          mkdir -p ~/.gradle/init.d
-          # Groovy init script (not Kotlin) so we can duck-type the Android
-          # extension without depending on the AGP classpath at compile time.
-          # Strategy:
-          #   - splits.abi configured via pluginManager.withPlugin (BEFORE eval)
-          #     because AGP locks splits early.
-          #   - minifyEnabled / shrinkResources set via afterEvaluate (AFTER eval)
-          #     to override the app's isMinifyEnabled=false.
-          echo 'Ly8gQ0ktaW5qZWN0ZWQ6IGVuYWJsZXMgUjggbWluaWZpY2F0aW9uLCByZXNvdXJjZSBzaHJpbmtpbmcsIGFuZCBwZXItQUJJIEFQSyBzcGxpdHMKLy8gV0lUSE9VVCBtb2RpZnlpbmcgdGhlIGFwcCdzIGJ1aWxkLmdyYWRsZS5rdHMgc291cmNlIGZpbGUuCi8vCi8vIFN0cmF0ZWd5OgovLyAgIC0gc3BsaXRzLmFiaSBpcyBjb25maWd1cmVkIHZpYSBwbHVnaW5NYW5hZ2VyLndpdGhQbHVnaW4gKHJ1bnMgd2hlbiBBR1AKLy8gICAgIGlzIGFwcGxpZWQsIGJlZm9yZSB0aGUgYnVpbGQgc2NyaXB0IGlzIGV2YWx1YXRlZCkuIFRoZSBhcHAncyBidWlsZAovLyAgICAgc2NyaXB0IGRvZXNuJ3QgdG91Y2ggc3BsaXRzLCBzbyBubyBjb25mbGljdC4KLy8gICAtIG1pbmlmeUVuYWJsZWQgLyBzaHJpbmtSZXNvdXJjZXMgYXJlIHNldCB2aWEgYWZ0ZXJFdmFsdWF0ZSAoYWZ0ZXIgdGhlCi8vICAgICBidWlsZCBzY3JpcHQgc2V0IGlzTWluaWZ5RW5hYmxlZD1mYWxzZSkuIFRoZXNlIHByb3BlcnRpZXMgY2FuIHN0aWxsCi8vICAgICBiZSBjaGFuZ2VkIGF0IHRoaXMgc3RhZ2UgKHVubGlrZSBzcGxpdHMgd2hpY2ggbG9jayBlYXJsaWVyKS4KYWxscHJvamVjdHMgeyBwcm9qZWN0IC0+CiAgICBpZiAocHJvamVjdC5uYW1lID09ICJhcHAiKSB7CiAgICAgICAgcHJvamVjdC5wbHVnaW5NYW5hZ2VyLndpdGhQbHVnaW4oImNvbS5hbmRyb2lkLmFwcGxpY2F0aW9uIikgewogICAgICAgICAgICAvLyBDb25maWd1cmUgQUJJIHNwbGl0cyBCRUZPUkUgZXZhbHVhdGlvbgogICAgICAgICAgICBwcm9qZWN0LmFuZHJvaWQgewogICAgICAgICAgICAgICAgc3BsaXRzIHsKICAgICAgICAgICAgICAgICAgICBhYmkgewogICAgICAgICAgICAgICAgICAgICAgICBlbmFibGUgdHJ1ZQogICAgICAgICAgICAgICAgICAgICAgICByZXNldCgpCiAgICAgICAgICAgICAgICAgICAgICAgIGluY2x1ZGUgImFybWVhYmktdjdhIiwgImFybTY0LXY4YSIsICJ4ODYiLCAieDg2XzY0IgogICAgICAgICAgICAgICAgICAgICAgICB1bml2ZXJzYWxBcGsgZmFsc2UKICAgICAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0KICAgICAgICAgICAgLy8gT3ZlcnJpZGUgbWluaWZ5L3NocmluayBBRlRFUiBldmFsdWF0aW9uICh0aGUgYXBwIHNldHMgdGhlbSB0byBmYWxzZSkKICAgICAgICAgICAgcHJvamVjdC5hZnRlckV2YWx1YXRlIHsKICAgICAgICAgICAgICAgIHByb2plY3QuYW5kcm9pZC5idWlsZFR5cGVzLnJlbGVhc2UgewogICAgICAgICAgICAgICAgICAgIG1pbmlmeUVuYWJsZWQgdHJ1ZQogICAgICAgICAgICAgICAgICAgIHNocmlua1Jlc291cmNlcyB0cnVlCiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICB9Cn0K' \
-            | base64 -d > ~/.gradle/init.d/optimizations.gradle
-          echo "--- Init script created at ~/.gradle/init.d/optimizations.gradle ---"
-          cat ~/.gradle/init.d/optimizations.gradle
-
-      - name: Build release APKs (with R8 + resource shrinking + ABI splits)
+      - name: Build release APK
         working-directory: android
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -98,42 +87,17 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Show build outputs (sizes)
-        working-directory: android
-        run: |
-          echo "=== All generated APKs ==="
-          find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \; | awk '{print $5, $9}'
-          echo ""
-          echo "=== Total size ==="
-          du -sh app/build/outputs/apk/release/ || true
-
-      - name: Upload all APKs (per-ABI)
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chatfloat-release-apks
-          path: android/app/build/outputs/apk/release/**/*.apk
+          name: chatfloat-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Summary
+      - name: Show build outputs
         working-directory: android
         run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Generated APKs (per-ABI, with R8 full mode + resource shrinking):" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| File | Size | ABI |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|-----|" >> $GITHUB_STEP_SUMMARY
-          for f in app/build/outputs/apk/release/*/*.apk; do
-            if [ -f "$f" ]; then
-              size=$(du -h "$f" | awk '{print $1}')
-              abi=$(basename "$(dirname "$f")")
-              name=$(basename "$f")
-              echo "| $name | $size | $abi |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Which one to install?**" >> $GITHUB_STEP_SUMMARY
-          echo "- Most modern phones (Android 8.0+): use \`*-arm64-v8a.apk\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Older 32-bit phones: use \`*-armeabi-v7a.apk\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Emulators: use \`*-x86_64.apk\` (or \`*-x86.apk\`)" >> $GITHUB_STEP_SUMMARY
+          ls -la app/build/outputs/apk/release/ || true
+          echo "=== APK info ==="
+          find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;

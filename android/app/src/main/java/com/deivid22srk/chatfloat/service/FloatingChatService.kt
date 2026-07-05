@@ -30,56 +30,34 @@ import androidx.core.app.NotificationCompat
 import com.deivid22srk.chatfloat.ChatFloatApplication
 import com.deivid22srk.chatfloat.MainActivity
 import com.deivid22srk.chatfloat.R
-import com.deivid22srk.chatfloat.data.AccountManager
-import com.deivid22srk.chatfloat.data.ChatFloatDatabase
-import com.deivid22srk.chatfloat.data.TelegramBotRepository
+import com.deivid22srk.chatfloat.data.GoBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.map
 
 /**
  * Foreground service that shows a floating chat overlay above other apps.
  *
- * Uses WindowManager with TYPE_APPLICATION_OVERLAY (API 26+) to draw a small
- * chat window the user can drag around while playing. The overlay has:
- *   - A draggable header bar with collapse / close buttons
- *   - A scrollable messages area
- *   - An input row with EditText + Send button
- *
- * Messages are sent and received via the Telegram Bot API (long polling on
- * getUpdates). The local token + username are read from AccountManager.
- * Messages are persisted in Room database so they survive service restarts.
+ * Now backed by the Go library (libchatfloat.so) — all Telegram communication
+ * happens in Go. This service just reads cached messages from Go every 500ms
+ * and renders them as a TextView.
  */
 class FloatingChatService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var rootView: View? = null
-    private var telegramRepo: TelegramBotRepository? = null
-    private var accountManager: AccountManager? = null
-    private var db: ChatFloatDatabase? = null
-
-    private var localToken: String = ""
-    private var localUsername: String = ""
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var pollingJob: Job? = null
-    private var observerJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        telegramRepo = TelegramBotRepository()
-        accountManager = AccountManager(this)
-        db = ChatFloatDatabase.get(this)
-        localToken = accountManager?.getToken().orEmpty()
-        localUsername = accountManager?.getUsername().orEmpty()
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
@@ -138,11 +116,7 @@ class FloatingChatService : Service() {
             setTextColor(Color.parseColor("#1F1F2E"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            text = if (localToken.isEmpty()) {
-                "Crie uma conta no app primeiro."
-            } else {
-                "Aguardando mensagens…"
-            }
+            text = "Aguardando mensagens…"
         }
         val scrollView = ScrollView(this).apply {
             addView(messagesText)
@@ -250,133 +224,68 @@ class FloatingChatService : Service() {
         // === Send ===
         btnSend.setOnClickListener {
             val text = input.text?.toString().orEmpty()
-            if (text.isBlank() || localToken.isEmpty()) return@setOnClickListener
+            if (text.isBlank()) return@setOnClickListener
             input.text?.clear()
             input.clearFocus()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(input.windowToken, 0)
 
             scope.launch {
-                runCatching {
-                    val msg = telegramRepo?.sendMessage(text.trim(), localToken, localUsername)
-                    if (msg != null) {
-                        db?.messageDao()?.insert(
-                            com.deivid22srk.chatfloat.data.MessageEntity(
-                                id = msg.id,
-                                text = msg.text,
-                                senderName = msg.senderName,
-                                senderToken = msg.senderToken,
-                                senderAvatar = msg.senderAvatar,
-                                timestamp = msg.timestamp,
-                                isOutgoing = true
-                            )
-                        )
-                    }
-                }
+                GoBridge.sendMessage(text.trim())
             }
         }
 
         // === Add the view ===
         windowManager.addView(root, params)
         rootView = root
-
-        // === Observe Room messages ===
-        observerJob = scope.launch {
-            db?.messageDao()?.observeAll()?.collect { entities ->
-                if (entities.isEmpty()) {
-                    messagesText.text = if (localToken.isEmpty()) {
-                        "Crie uma conta no app primeiro."
-                    } else {
-                        "Aguardando mensagens…"
-                    }
-                } else {
-                    val sb = SpannableStringBuilder()
-                    entities.takeLast(50).forEach { e ->
-                        if (e.isOutgoing) {
-                            val s = sb.length
-                            sb.append("Você: ")
-                            sb.setSpan(
-                                StyleSpan(android.graphics.Typeface.BOLD),
-                                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                            )
-                        } else {
-                            val s = sb.length
-                            sb.append("${e.senderName}: ")
-                            sb.setSpan(
-                                StyleSpan(android.graphics.Typeface.BOLD),
-                                s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                            )
-                        }
-                        sb.append(e.text)
-                        sb.append("\n\n")
-                    }
-                    messagesText.text = sb
-                    scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
-                }
-            }
-        }
     }
 
     private fun startPolling() {
         if (pollingJob != null) return
-        if (localToken.isEmpty()) return
         pollingJob = scope.launch {
             while (true) {
                 runCatching {
-                    val batch = telegramRepo?.getUpdates() ?: return@runCatching
-                    val database = db ?: return@runCatching
-
-                    // Apply envelopes
-                    for (env in batch.envelopes) {
-                        when (env.type) {
-                            "REGISTER" -> {
-                                val existing = database.knownAccountDao().findByToken(env.token)
-                                database.knownAccountDao().upsert(
-                                    com.deivid22srk.chatfloat.data.KnownAccountEntity(
-                                        token = env.token,
-                                        username = env.username
-                                            ?: existing?.username
-                                            ?: "user-${env.token.take(4)}",
-                                        avatarBase64 = env.avatarBase64 ?: existing?.avatarBase64,
-                                        firstSeen = existing?.firstSeen
-                                            ?: System.currentTimeMillis()
-                                    )
-                                )
-                            }
-                            "AVATAR" -> {
-                                val existing = database.knownAccountDao().findByToken(env.token)
-                                    ?: continue
-                                database.knownAccountDao().upsert(
-                                    existing.copy(avatarBase64 = env.avatarBase64)
-                                )
-                            }
-                        }
-                    }
-
-                    // Persist incoming chat messages
-                    if (batch.messages.isNotEmpty()) {
-                        val existingIds = database.messageDao().getAll().map { it.id }.toHashSet()
-                        val newOnes = batch.messages.filter { it.id !in existingIds }
-                        if (newOnes.isNotEmpty()) {
-                            database.messageDao().insertAll(
-                                newOnes.map {
-                                    com.deivid22srk.chatfloat.data.MessageEntity(
-                                        id = it.id,
-                                        text = it.text,
-                                        senderName = it.senderName,
-                                        senderToken = it.senderToken,
-                                        senderAvatar = it.senderAvatar,
-                                        timestamp = it.timestamp,
-                                        isOutgoing = it.isOutgoing
-                                    )
-                                }
-                            )
-                        }
-                    }
+                    val msgs = GoBridge.getMessages()
+                    updateMessagesText(msgs)
                 }
-                delay(1_000)
+                delay(500)
             }
         }
+    }
+
+    private fun updateMessagesText(msgs: List<com.deivid22srk.chatfloat.data.ChatMessage>) {
+        val rootView = rootView ?: return
+        val scrollView = rootView.findViewById<ScrollView>(android.R.id.text1) ?: return
+        // Find the TextView inside the ScrollView
+        val textView = (scrollView.getChildAt(0) as? TextView) ?: return
+
+        if (msgs.isEmpty()) {
+            textView.text = "Aguardando mensagens…"
+            return
+        }
+
+        val sb = SpannableStringBuilder()
+        msgs.takeLast(50).forEach { msg ->
+            if (msg.isOutgoing) {
+                val s = sb.length
+                sb.append("Você: ")
+                sb.setSpan(
+                    StyleSpan(android.graphics.Typeface.BOLD),
+                    s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            } else {
+                val s = sb.length
+                sb.append("${msg.senderName}: ")
+                sb.setSpan(
+                    StyleSpan(android.graphics.Typeface.BOLD),
+                    s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+            sb.append(msg.text)
+            sb.append("\n\n")
+        }
+        textView.text = sb
+        scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
     private fun buildNotification(): Notification {
@@ -402,8 +311,6 @@ class FloatingChatService : Service() {
         super.onDestroy()
         pollingJob?.cancel()
         pollingJob = null
-        observerJob?.cancel()
-        observerJob = null
         rootView?.let {
             runCatching { windowManager.removeView(it) }
         }

@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
 
@@ -14,15 +13,21 @@ android {
         applicationId = "com.deivid22srk.chatfloat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "3.0.0"
+        versionCode = 4
+        versionName = "4.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
 
-        // Telegram Bot API config via BuildConfig
+        // Telegram Bot API config (still needed because we pass it to Go)
         buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"7594927232:AAFh5T_zZvPtqvoGpyGVO-Kd8uGVDKdp3LE\"")
         buildConfigField("String", "TELEGRAM_GROUP_ID", "\"-1004384994615\"")
+
+        // Build only arm64-v8a to keep the APK small.
+        // The Go shared library is only compiled for this ABI.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     signingConfigs {
@@ -64,6 +69,12 @@ android {
             excludes += "/META-INF/DEPENDENCIES"
             excludes += "META-INF/*.kotlin_module"
         }
+        // Pick the first .so file if duplicate; this is a no-op here but
+        // documents intent. The jniLibs/arm64-v8a/libchatfloat.so is added
+        // by the build workflow.
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 }
 
@@ -84,12 +95,8 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
-    implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
-    implementation(libs.kotlinx.datetime)
-    implementation(libs.ktor.core)
-    implementation(libs.ktor.cio)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
