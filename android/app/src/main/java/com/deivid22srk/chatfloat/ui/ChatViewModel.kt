@@ -1,26 +1,24 @@
 package com.deivid22srk.chatfloat.ui
 
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.deivid22srk.chatfloat.data.ChatRepository
-import com.deivid22srk.chatfloat.data.Message
-import com.deivid22srk.chatfloat.data.Profile
-import io.github.jan.supabase.realtime.PostgresAction
-import io.github.jan.supabase.realtime.RealtimeChannel
-import io.github.jan.supabase.realtime.postgresChangeFlow
+import com.deivid22srk.chatfloat.data.ChatMessage
+import com.deivid22srk.chatfloat.data.TelegramBotRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.jsonPrimitive
 
 class ChatViewModel : ViewModel() {
 
-    private val repo = ChatRepository()
+    private val repo = TelegramBotRepository()
 
-    private val _messages = MutableStateFlow<List<Message>>(emptyList())
-    val messages: StateFlow<List<Message>> = _messages.asStateFlow()
+    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
@@ -28,74 +26,78 @@ class ChatViewModel : ViewModel() {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private var realtimeJob: Job? = null
-    private var channel: RealtimeChannel? = null
+    private val _username = MutableStateFlow("")
+    val username: StateFlow<String> = _username.asStateFlow()
 
-    fun loadInitial() {
-        viewModelScope.launch {
-            runCatching { repo.fetchRecentMessages() }
-                .onSuccess { _messages.value = it }
-                .onFailure { _error.value = it.message }
-        }
+    private var prefs: SharedPreferences? = null
+    private var pollingJob: Job? = null
+
+    fun init(context: Context) {
+        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        _username.value = prefs?.getString(KEY_USERNAME, "") ?: ""
     }
 
-    fun startRealtime() {
-        if (realtimeJob != null) return
-        realtimeJob = viewModelScope.launch {
-            runCatching {
-                repo.startRealtime()
-                val ch = repo.messagesChannel()
-                channel = ch
-                ch.subscribe()
-                ch.postgresChangeFlow<PostgresAction.Insert>("public") {
-                    table = "messages"
-                }.collect { action ->
-                    val record = action.record
-                    val id = record["id"]?.jsonPrimitive?.content ?: return@collect
-                    val msg = Message(
-                        id = id,
-                        roomId = record["room_id"]?.jsonPrimitive?.content,
-                        userId = record["user_id"]?.jsonPrimitive?.content,
-                        username = record["username"]?.jsonPrimitive?.content ?: "",
-                        content = record["content"]?.jsonPrimitive?.content ?: "",
-                        createdAt = record["created_at"]?.jsonPrimitive?.content
-                    )
-                    // Avoid duplicates
-                    if (_messages.value.none { it.id == msg.id }) {
-                        _messages.value = _messages.value + msg
-                    }
-                }
-            }.onFailure { _error.value = it.message }
-        }
+    fun setUsername(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        prefs?.edit()?.putString(KEY_USERNAME, trimmed)?.apply()
+        _username.value = trimmed
     }
 
-    fun stopRealtime() {
-        realtimeJob?.cancel()
-        realtimeJob = null
-        channel?.let { ch ->
-            // unsubscribe() is suspend — fire-and-forget on viewModelScope
-            viewModelScope.launch {
-                runCatching { ch.unsubscribe() }
-            }
+    fun send(text: String) {
+        if (text.isBlank()) return
+        val uname = _username.value
+        if (uname.isEmpty()) {
+            _error.value = "Configure seu nome de usuário primeiro"
+            return
         }
-        channel = null
-    }
-
-    fun send(content: String, profile: Profile) {
-        if (content.isBlank()) return
         viewModelScope.launch {
             _sending.value = true
             runCatching {
-                repo.sendMessage(content.trim(), profile.username, profile.id)
+                val msg = repo.sendMessage(text.trim(), uname)
+                // Add the sent message to the local list immediately.
+                // (The bot does NOT receive its own outgoing messages via getUpdates.)
+                _messages.value = _messages.value + msg
             }.onFailure { _error.value = it.message }
             _sending.value = false
         }
+    }
+
+    fun startPolling() {
+        if (pollingJob != null) return
+        pollingJob = viewModelScope.launch {
+            while (true) {
+                runCatching {
+                    val incoming = repo.getUpdates()
+                    if (incoming.isNotEmpty()) {
+                        // Append new messages, avoiding duplicates by id
+                        val existingIds = _messages.value.map { it.id }.toHashSet()
+                        val newOnes = incoming.filter { it.id !in existingIds }
+                        if (newOnes.isNotEmpty()) {
+                            _messages.value = _messages.value + newOnes
+                        }
+                    }
+                }.onFailure { _error.value = it.message }
+                // Small pause between polls to avoid hammering the API
+                delay(1_000)
+            }
+        }
+    }
+
+    fun stopPolling() {
+        pollingJob?.cancel()
+        pollingJob = null
     }
 
     fun clearError() { _error.value = null }
 
     override fun onCleared() {
         super.onCleared()
-        stopRealtime()
+        stopPolling()
+    }
+
+    companion object {
+        private const val PREFS_NAME = "chatfloat_prefs"
+        private const val KEY_USERNAME = "local_username"
     }
 }

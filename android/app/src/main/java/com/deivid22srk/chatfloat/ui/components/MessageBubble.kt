@@ -3,11 +3,8 @@ package com.deivid22srk.chatfloat.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,13 +18,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.deivid22srk.chatfloat.data.Message
+import com.deivid22srk.chatfloat.data.ChatMessage
 import com.deivid22srk.chatfloat.ui.theme.BubbleIncoming
 import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoing
 
 @Composable
-fun MessageBubble(message: Message, currentUserId: String?) {
-    val isOutgoing = message.userId == currentUserId
+fun MessageBubble(message: ChatMessage) {
+    val isOutgoing = message.isOutgoing
     val alignment = if (isOutgoing) Alignment.End else Alignment.Start
     val bubbleColor = if (isOutgoing) BubbleOutgoing else BubbleIncoming
     val textColor = if (isOutgoing) Color.White else MaterialTheme.colorScheme.onSurface
@@ -40,7 +37,7 @@ fun MessageBubble(message: Message, currentUserId: String?) {
     ) {
         if (!isOutgoing) {
             Text(
-                text = message.username,
+                text = message.senderName,
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
@@ -63,7 +60,7 @@ fun MessageBubble(message: Message, currentUserId: String?) {
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(
-                text = message.content,
+                text = message.text,
                 color = textColor,
                 fontSize = 14.sp,
                 lineHeight = 18.sp

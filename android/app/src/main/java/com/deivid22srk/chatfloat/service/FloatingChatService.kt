@@ -30,18 +30,15 @@ import androidx.core.app.NotificationCompat
 import com.deivid22srk.chatfloat.ChatFloatApplication
 import com.deivid22srk.chatfloat.MainActivity
 import com.deivid22srk.chatfloat.R
-import com.deivid22srk.chatfloat.data.ChatRepository
-import com.deivid22srk.chatfloat.data.Profile
-import io.github.jan.supabase.realtime.PostgresAction
-import io.github.jan.supabase.realtime.postgresChangeFlow
+import com.deivid22srk.chatfloat.data.ChatMessage
+import com.deivid22srk.chatfloat.data.TelegramBotRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Foreground service that shows a floating chat overlay above other apps.
@@ -52,48 +49,40 @@ import kotlinx.serialization.json.jsonPrimitive
  *   - A scrollable messages area
  *   - An input row with EditText + Send button
  *
- * Realtime messages are streamed from Supabase via the same channel used by
- * the in-app chat.
+ * Messages are sent and received via the Telegram Bot API (long polling on
+ * getUpdates). The local username is read from SharedPreferences.
  */
 class FloatingChatService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var rootView: View? = null
-    private var chatRepository: ChatRepository? = null
-    private var profile: Profile? = null
+    private var telegramRepo: TelegramBotRepository? = null
+    private var localUsername: String = ""
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var realtimeJob: Job? = null
+    private var pollingJob: Job? = null
 
-    private val messages = MutableStateFlow<List<com.deivid22srk.chatfloat.data.Message>>(emptyList())
+    private val messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    private var lastUpdateId = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        chatRepository = ChatRepository()
+        telegramRepo = TelegramBotRepository()
+        // Read the local username from SharedPreferences
+        val prefs = getSharedPreferences("chatfloat_prefs", Context.MODE_PRIVATE)
+        localUsername = prefs.getString("local_username", "") ?: ""
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (rootView == null) {
-            scope.launch {
-                initProfileAndLoad()
-                showOverlay()
-            }
+            showOverlay()
+            startPolling()
         }
         return START_STICKY
-    }
-
-    private suspend fun initProfileAndLoad() {
-        val repo = chatRepository ?: return
-        val user = repo.currentUser() ?: return
-        val p = repo.fetchProfile(user.id) ?: Profile(user.id, user.id.take(8))
-        profile = p
-
-        runCatching { repo.fetchRecentMessages(50) }
-            .onSuccess { messages.value = it }
     }
 
     private fun showOverlay() {
@@ -143,7 +132,11 @@ class FloatingChatService : Service() {
             setTextColor(Color.parseColor("#1F1F2E"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            text = "Carregando mensagens…"
+            text = if (localUsername.isEmpty()) {
+                "Configure seu nome de usuário no app primeiro."
+            } else {
+                "Aguardando mensagens…"
+            }
         }
         val scrollView = ScrollView(this).apply {
             addView(messagesText)
@@ -212,7 +205,6 @@ class FloatingChatService : Service() {
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
-        var moved = false
         header.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -220,12 +212,10 @@ class FloatingChatService : Service() {
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
-                    moved = false
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - initialTouchX
                     val dy = event.rawY - initialTouchY
-                    if (dx * dx + dy * dy > 25) moved = true
                     params.x = initialX + dx.toInt()
                     params.y = initialY + dy.toInt()
                     windowManager.updateViewLayout(root, params)
@@ -254,17 +244,18 @@ class FloatingChatService : Service() {
         // === Send ===
         btnSend.setOnClickListener {
             val text = input.text?.toString().orEmpty()
-            val p = profile ?: return@setOnClickListener
-            if (text.isBlank()) return@setOnClickListener
+            if (text.isBlank() || localUsername.isEmpty()) return@setOnClickListener
             input.text?.clear()
-            // Force the input to lose focus so the keyboard can dismiss
             input.clearFocus()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(input.windowToken, 0)
 
             scope.launch {
                 runCatching {
-                    chatRepository?.sendMessage(text.trim(), p.username, p.id)
+                    val msg = telegramRepo?.sendMessage(text.trim(), localUsername)
+                    if (msg != null) {
+                        messages.value = messages.value + msg
+                    }
                 }
             }
         }
@@ -277,15 +268,33 @@ class FloatingChatService : Service() {
         scope.launch {
             messages.collect { list ->
                 if (list.isEmpty()) {
-                    messagesText.text = "Sem mensagens ainda. Diga oi!"
+                    messagesText.text = if (localUsername.isEmpty()) {
+                        "Configure seu nome de usuário no app primeiro."
+                    } else {
+                        "Aguardando mensagens…"
+                    }
                 } else {
                     val sb = SpannableStringBuilder()
                     list.takeLast(50).forEach { msg ->
-                        val nameStart = sb.length
-                        sb.append(msg.username)
-                        sb.setSpan(StyleSpan(android.graphics.Typeface.BOLD), nameStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                        sb.append(": ")
-                        sb.append(msg.content)
+                        if (msg.isOutgoing) {
+                            sb.append("Você: ")
+                            sb.setSpan(
+                                StyleSpan(android.graphics.Typeface.BOLD),
+                                sb.length - "Você: ".length,
+                                sb.length,
+                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        } else {
+                            val nameStart = sb.length
+                            sb.append(msg.senderName + ": ")
+                            sb.setSpan(
+                                StyleSpan(android.graphics.Typeface.BOLD),
+                                nameStart,
+                                sb.length,
+                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                        sb.append(msg.text)
                         sb.append("\n\n")
                     }
                     messagesText.text = sb
@@ -293,36 +302,24 @@ class FloatingChatService : Service() {
                 }
             }
         }
-
-        // === Start realtime ===
-        startRealtime()
     }
 
-    private fun startRealtime() {
-        if (realtimeJob != null) return
-        realtimeJob = scope.launch {
-            val repo = chatRepository ?: return@launch
-            runCatching {
-                repo.startRealtime()
-                val ch = repo.messagesChannel()
-                ch.subscribe()
-                ch.postgresChangeFlow<PostgresAction.Insert>("public") {
-                    table = "messages"
-                }.collect { action ->
-                    val record = action.record
-                    val id = record["id"]?.jsonPrimitive?.content ?: return@collect
-                    val msg = com.deivid22srk.chatfloat.data.Message(
-                        id = id,
-                        roomId = record["room_id"]?.jsonPrimitive?.content,
-                        userId = record["user_id"]?.jsonPrimitive?.content,
-                        username = record["username"]?.jsonPrimitive?.content ?: "",
-                        content = record["content"]?.jsonPrimitive?.content ?: "",
-                        createdAt = record["created_at"]?.jsonPrimitive?.content
-                    )
-                    if (messages.value.none { it.id == msg.id }) {
-                        messages.value = messages.value + msg
+    private fun startPolling() {
+        if (pollingJob != null) return
+        if (localUsername.isEmpty()) return
+        pollingJob = scope.launch {
+            while (true) {
+                runCatching {
+                    val incoming = telegramRepo?.getUpdates().orEmpty()
+                    if (incoming.isNotEmpty()) {
+                        val existingIds = messages.value.map { it.id }.toHashSet()
+                        val newOnes = incoming.filter { it.id !in existingIds }
+                        if (newOnes.isNotEmpty()) {
+                            messages.value = messages.value + newOnes
+                        }
                     }
                 }
+                delay(1_000)
             }
         }
     }
@@ -348,8 +345,8 @@ class FloatingChatService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        realtimeJob?.cancel()
-        realtimeJob = null
+        pollingJob?.cancel()
+        pollingJob = null
         rootView?.let {
             runCatching { windowManager.removeView(it) }
         }

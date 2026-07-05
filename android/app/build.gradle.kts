@@ -13,23 +13,15 @@ android {
         applicationId = "com.deivid22srk.chatfloat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
 
-        // Supabase config via BuildConfig
-        buildConfigField("String", "SUPABASE_URL", "\"https://dbvmkochemjmeyookgsu.supabase.co\"")
-        buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRidm1rb2NoZW1qbWV5b29rZ3N1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1OTA3MjIsImV4cCI6MjA5NTE2NjcyMn0.oAYv4hqQfnltl5sDmSTRwlkBfBeapCfxj7xaXyDqt78\"")
-    }
-
-    // Force-downgrade androidx.browser so we don't need compileSdk 36
-    // (Supabase Auth pulls in browser:1.10.0 which requires API 36)
-    configurations.all {
-        resolutionStrategy {
-            force("androidx.browser:browser:1.8.0")
-        }
+        // Telegram Bot API config via BuildConfig
+        buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"7594927232:AAFh5T_zZvPtqvoGpyGVO-Kd8uGVDKdp3LE\"")
+        buildConfigField("String", "TELEGRAM_GROUP_ID", "\"-1004384994615\"")
     }
 
     signingConfigs {
@@ -95,9 +87,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.datetime)
-    implementation(libs.supabase.auth)
-    implementation(libs.supabase.postgrest)
-    implementation(libs.supabase.realtime)
     implementation(libs.ktor.core)
     implementation(libs.ktor.cio)
     debugImplementation(libs.androidx.ui.tooling)

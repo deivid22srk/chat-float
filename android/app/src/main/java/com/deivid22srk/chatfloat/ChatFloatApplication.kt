@@ -4,13 +4,10 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
-import com.deivid22srk.chatfloat.data.SupabaseClient
 
 class ChatFloatApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Initialize Supabase singleton
-        SupabaseClient.init()
         createNotificationChannel()
     }
 

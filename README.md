@@ -9,14 +9,39 @@ Aplicativo Android de chat simples e leve, projetado para enviar mensagens enqua
 
 - Kotlin + Jetpack Compose (UI do app principal)
 - Views nativas (UI do overlay flutuante — mais leve e estável)
-- Supabase (Auth + Postgres + Realtime)
+- Telegram Bot API (backend de mensagens)
+- Ktor Client (HTTP) + kotlinx.serialization (JSON)
 - Coroutines + Flow
 - Material 3
 
+## Como funciona
+
+O app usa um bot do Telegram (`@ChatFloat5_bot`) como backend. Todas as mensagens enviadas pelo app são postadas no grupo do Telegram através do bot. Mensagens recebidas vêm do grupo via long polling em `getUpdates`.
+
+- **Bot:** `@ChatFloat5_bot` (token configurado via `BuildConfig.TELEGRAM_BOT_TOKEN`)
+- **Grupo:** `ChatFloat Grupo` (ID configurado via `BuildConfig.TELEGRAM_GROUP_ID`)
+- **Nome de usuário:** configurado localmente no app (armazenado em SharedPreferences)
+
+### ⚠️ Importante: Desativar Privacy Mode
+
+Por padrão, bots no Telegram só veem mensagens que:
+- São comandos (começam com `/`)
+- Mencionam o bot
+- São respostas a mensagens do bot
+
+Para o bot ver **todas** as mensagens do grupo (necessário para o chat funcionar como esperado), desative o Privacy Mode:
+
+1. Abra `@BotFather` no Telegram
+2. Envio `/setprivacy`
+3. Selecione o bot `@ChatFloat5_bot`
+4. Escolha **Disable**
+5. Remova o bot do grupo e adicione novamente (a mudança só faz efeito após re-adicionar)
+
 ## Funcionalidades
 
-- Cadastro / login por e-mail e senha
-- Sala de chat geral pública em tempo real
+- Configuração inicial de nome de usuário (sem necessidade de login/senha)
+- Mensagens enviadas aparecem no grupo do Telegram como o bot
+- Mensagens de outros membros do grupo aparecem no app em tempo real
 - Janela flutuante arrastável com input e lista de mensagens
 - Botão de recolher / expandir o overlay
 - Notificação de foreground service para manter o overlay ativo
@@ -40,22 +65,23 @@ Após executar o workflow, o APK assinado é publicado como artefato para downlo
 
 ```
 app/src/main/java/com/deivid22srk/chatfloat/
-├── ChatFloatApplication.kt       # init do Supabase + canal de notificação
+├── ChatFloatApplication.kt       # canal de notificação
 ├── MainActivity.kt               # ponto de entrada Compose
-├── data/                         # models, repository, cliente Supabase
+├── data/
+│   ├── Models.kt                 # modelos de dados (ChatMessage, TelegramMessage etc.)
+│   └── TelegramBotRepository.kt  # cliente do Telegram Bot API
 ├── service/
 │   └── FloatingChatService.kt    # foreground service do overlay
 ├── ui/
-│   ├── AuthViewModel.kt
-│   ├── ChatViewModel.kt
+│   ├── ChatViewModel.kt          # estado do chat + polling
 │   ├── theme/                    # cores, tipografia, tema
 │   ├── components/               # MessageBubble
-│   └── screens/                  # LoginScreen, ChatScreen
+│   └── screens/                  # UsernameScreen, ChatScreen
 ```
 
 ## Permissões
 
-- `INTERNET` — acesso ao Supabase
+- `INTERNET` — acesso à API do Telegram
 - `SYSTEM_ALERT_WINDOW` — desenhar overlay sobre outros apps
 - `FOREGROUND_SERVICE` — manter o overlay ativo em background
 - `POST_NOTIFICATIONS` — notificação do foreground service (Android 13+)

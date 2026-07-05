@@ -4,22 +4,17 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.deivid22srk.chatfloat.ui.AuthViewModel
 import com.deivid22srk.chatfloat.ui.ChatViewModel
 import com.deivid22srk.chatfloat.ui.screens.ChatScreen
-import com.deivid22srk.chatfloat.ui.screens.LoginScreen
+import com.deivid22srk.chatfloat.ui.screens.UsernameScreen
 import com.deivid22srk.chatfloat.ui.theme.ChatFloatTheme
 
 class MainActivity : ComponentActivity() {
@@ -41,28 +36,24 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppRoot() {
-    val authVm: AuthViewModel = viewModel()
     val chatVm: ChatViewModel = viewModel()
+    val username by chatVm.username.collectAsState()
 
-    val state by authVm.state.collectAsState()
+    AppLifecycleObserver(chatVm)
 
-    when (val s = state) {
-        AuthViewModel.AuthState.Loading,
-        AuthViewModel.AuthState.Unauthenticated -> {
-            if (s is AuthViewModel.AuthState.Loading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                LoginScreen(viewModel = authVm)
-            }
-        }
-        is AuthViewModel.AuthState.Authenticated -> {
-            ChatScreen(
-                profile = s.profile,
-                viewModel = chatVm,
-                onLogout = { authVm.signOut() }
-            )
-        }
+    if (username.isEmpty()) {
+        UsernameScreen(onSave = { chatVm.setUsername(it) })
+    } else {
+        ChatScreen(viewModel = chatVm)
+    }
+}
+
+@Composable
+private fun AppLifecycleObserver(viewModel: ChatViewModel) {
+    // Trigger init once
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        viewModel.init(context)
+        viewModel.startPolling()
     }
 }

@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,29 +48,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.deivid22srk.chatfloat.data.Profile
 import com.deivid22srk.chatfloat.service.FloatingChatService
 import com.deivid22srk.chatfloat.ui.ChatViewModel
 import com.deivid22srk.chatfloat.ui.components.MessageBubble
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(
-    profile: Profile,
-    viewModel: ChatViewModel,
-    onLogout: () -> Unit
-) {
+fun ChatScreen(viewModel: ChatViewModel) {
     val context = LocalContext.current
     val messages by viewModel.messages.collectAsState()
     val sending by viewModel.sending.collectAsState()
+    val username by viewModel.username.collectAsState()
 
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-
-    LaunchedEffect(Unit) {
-        viewModel.loadInitial()
-        viewModel.startRealtime()
-    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -85,12 +75,12 @@ fun ChatScreen(
                 title = {
                     Column {
                         Text(
-                            "Sala geral",
+                            "ChatFloat",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 18.sp
                         )
                         Text(
-                            "Conectado como ${profile.username}",
+                            "Conectado como $username",
                             fontSize = 11.sp,
                             color = Color.White.copy(alpha = 0.85f)
                         )
@@ -112,12 +102,6 @@ fun ChatScreen(
                         }
                     }) {
                         Icon(Icons.Filled.PictureInPicture, contentDescription = "Janela flutuante")
-                    }
-                    IconButton(onClick = {
-                        context.stopService(Intent(context, FloatingChatService::class.java))
-                        onLogout()
-                    }) {
-                        Icon(Icons.Filled.Logout, contentDescription = "Sair")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -148,7 +132,7 @@ fun ChatScreen(
                 IconButton(
                     onClick = {
                         if (input.isNotBlank() && !sending) {
-                            viewModel.send(input, profile)
+                            viewModel.send(input)
                             input = ""
                         }
                     },
@@ -197,10 +181,7 @@ fun ChatScreen(
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
                     items(messages, key = { it.id }) { msg ->
-                        MessageBubble(
-                            message = msg,
-                            currentUserId = profile.id
-                        )
+                        MessageBubble(message = msg)
                     }
                 }
             }
