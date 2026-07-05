@@ -6,7 +6,6 @@ import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.engine.create
 
 /**
  * Singleton wrapper around the Supabase client.
