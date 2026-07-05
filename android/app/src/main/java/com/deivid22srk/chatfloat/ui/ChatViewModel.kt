@@ -25,8 +25,10 @@ class ChatViewModel : ViewModel() {
     private var pollingJob: Job? = null
 
     /**
-     * Polls Go for new messages. The Go side fetches messages from Supabase
-     * on each call, so we just refresh our local copy every 2s.
+     * Polls Go for the local message cache. The Go side maintains a cache
+     * that is updated via Supabase Realtime (WebSocket) — so this poll
+     * does NOT make any HTTP requests, it just reads the local cache.
+     * We poll every 500ms to reflect cache changes in the UI quickly.
      */
     fun startPolling() {
         if (pollingJob != null) return
@@ -35,7 +37,7 @@ class ChatViewModel : ViewModel() {
                 runCatching {
                     _messages.value = GoBridge.getMessages()
                 }
-                delay(2000)
+                delay(500)
             }
         }
     }

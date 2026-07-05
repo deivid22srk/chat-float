@@ -20,10 +20,19 @@ type Session struct {
         mu          sync.Mutex
         account     *Account
         supabase    *SupabaseClient
+        realtime    *RealtimeClient
         dataDir     string
+
+        // Cache: messages and account lookups to avoid redundant HTTP requests
+        cachedMessages   []ChatMessage
+        accountCache     map[string]*Account // token -> Account (includes avatar URL)
+        lastMessageID    int64
+        messagesLoaded   bool
 }
 
-var globalSession = &Session{}
+var globalSession = &Session{
+        accountCache: make(map[string]*Account),
+}
 
 // Config holds the Supabase configuration.
 type Config struct {
@@ -221,8 +230,9 @@ func UpdateAvatarAPI(avatarPNG []byte) error {
         return nil
 }
 
-// SendMessageAPI inserts a new message into Supabase. The message is marked
-// as outgoing in the local cache.
+// SendMessageAPI inserts a new message into Supabase and adds it to the
+// local cache immediately (so the sender sees it without waiting for the
+// Realtime listener to echo it back).
 func SendMessageAPI(text string) error {
         globalSession.mu.Lock()
         defer globalSession.mu.Unlock()
@@ -243,11 +253,24 @@ func SendMessageAPI(text string) error {
                 return err
         }
         msg.IsOutgoing = true
+
+        // Add to local cache immediately
+        globalSession.cachedMessages = append(globalSession.cachedMessages, *msg)
+        if msg.ID > globalSession.lastMessageID {
+                globalSession.lastMessageID = msg.ID
+        }
+        globalSession.messagesLoaded = true // we have at least one message now
+
+        // Start realtime if not already started
+        if globalSession.realtime == nil {
+                startRealtime()
+        }
         return nil
 }
 
-// GetMessagesAPI returns all messages from Supabase, oldest first.
-// Each message is enriched with the sender's avatar.
+// GetMessagesAPI returns cached messages (no HTTP request if already loaded).
+// On first call, fetches all messages from Supabase and starts the Realtime
+// WebSocket listener. Subsequent calls return the local cache instantly.
 func GetMessagesAPI() ([]ChatMessage, error) {
         globalSession.mu.Lock()
         defer globalSession.mu.Unlock()
@@ -255,27 +278,124 @@ func GetMessagesAPI() ([]ChatMessage, error) {
         if globalSession.supabase == nil {
                 return nil, errors.New("not configured")
         }
-        msgs, err := globalSession.supabase.GetMessages(0)
-        if err != nil {
-                return nil, err
+
+        // If messages haven't been loaded yet, do an initial fetch
+        if !globalSession.messagesLoaded {
+                msgs, err := globalSession.supabase.GetMessages(0)
+                if err != nil {
+                        return nil, err
+                }
+                // Enrich and mark outgoing
+                enrichMessages(msgs)
+                globalSession.cachedMessages = msgs
+                if len(msgs) > 0 {
+                        globalSession.lastMessageID = msgs[len(msgs)-1].ID
+                }
+                globalSession.messagesLoaded = true
+
+                // Start the Realtime listener (fire-and-forget)
+                startRealtime()
         }
-        // Mark messages from the current user as outgoing
-        if globalSession.account != nil {
-                for i := range msgs {
-                        if msgs[i].SenderToken == globalSession.account.Token {
-                                msgs[i].IsOutgoing = true
+
+        // Return a copy of the cache
+        out := make([]ChatMessage, len(globalSession.cachedMessages))
+        copy(out, globalSession.cachedMessages)
+        return out, nil
+}
+
+// enrichMessages fills in the avatar URL and isOutgoing flag for each message
+// using the account cache. Caller must hold globalSession.mu.
+func enrichMessages(msgs []ChatMessage) {
+        if globalSession.account == nil {
+                return
+        }
+        for i := range msgs {
+                if msgs[i].SenderToken == globalSession.account.Token {
+                        msgs[i].IsOutgoing = true
+                }
+                // Enrich with avatar from cache
+                if msgs[i].SenderToken != "" {
+                        if acc, ok := globalSession.accountCache[msgs[i].SenderToken]; ok {
+                                msgs[i].SenderAvatar = acc.AvatarURL
+                                if acc.Username != "" {
+                                        msgs[i].SenderName = acc.Username
+                                }
                         }
                 }
         }
-        return msgs, nil
 }
 
-// LogoutAPI clears the current account and removes the persisted file.
+// startRealtime starts the Supabase Realtime WebSocket listener.
+// When a new message INSERT arrives, it's appended to the cache.
+// Caller must hold globalSession.mu (or be in a context where it's safe).
+func startRealtime() {
+        if globalSession.realtime != nil {
+                return
+        }
+        supabaseURL := globalSession.supabase.baseURL
+        apiKey := globalSession.supabase.apiKey
+        globalSession.realtime = NewRealtimeClient(supabaseURL, apiKey)
+
+        go func() {
+                err := globalSession.realtime.Start(func(msg ChatMessage) {
+                        globalSession.mu.Lock()
+                        defer globalSession.mu.Unlock()
+
+                        // Skip if we already have this message (dedup by ID)
+                        for _, existing := range globalSession.cachedMessages {
+                                if existing.ID == msg.ID {
+                                        return
+                                }
+                        }
+
+                        // Enrich the new message
+                        enriched := []ChatMessage{msg}
+                        enrichMessages(enriched)
+                        globalSession.cachedMessages = append(globalSession.cachedMessages, enriched[0])
+                        if msg.ID > globalSession.lastMessageID {
+                                globalSession.lastMessageID = msg.ID
+                        }
+
+                        // If the sender is unknown, fetch their account (one HTTP request)
+                        if msg.SenderToken != "" {
+                                if _, ok := globalSession.accountCache[msg.SenderToken]; !ok {
+                                        if acc, err := globalSession.supabase.GetAccountByToken(msg.SenderToken); err == nil && acc != nil {
+                                                globalSession.accountCache[msg.SenderToken] = acc
+                                                // Update the just-added message's avatar
+                                                enriched[0].SenderAvatar = acc.AvatarURL
+                                                if acc.Username != "" {
+                                                        enriched[0].SenderName = acc.Username
+                                                }
+                                                // Replace the last message in cache with the enriched version
+                                                if len(globalSession.cachedMessages) > 0 {
+                                                        globalSession.cachedMessages[len(globalSession.cachedMessages)-1] = enriched[0]
+                                                }
+                                        }
+                                }
+                        }
+                })
+                _ = err
+        }()
+}
+
+// LogoutAPI clears the current account, stops the Realtime listener,
+// and removes the persisted file.
 func LogoutAPI() error {
         globalSession.mu.Lock()
         defer globalSession.mu.Unlock()
 
+        // Stop the realtime listener
+        if globalSession.realtime != nil {
+                globalSession.realtime.Stop()
+                globalSession.realtime = nil
+        }
+
         globalSession.account = nil
+        globalSession.cachedMessages = nil
+        globalSession.messagesLoaded = false
+        globalSession.lastMessageID = 0
+        globalSession.accountCache = make(map[string]*Account)
+
         if globalSession.dataDir != "" {
                 _ = ClearAccount(globalSession.dataDir)
         }
