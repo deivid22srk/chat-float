@@ -347,16 +347,49 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
 
             // === Logout ===
+            var showLogoutDialog by remember { mutableStateOf(false) }
             OutlinedButton(
-                onClick = { authVm.logout() },
+                onClick = { showLogoutDialog = true },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp),
+                    .height(52.dp),
+                shape = MaterialTheme.shapes.medium,
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.error
                 )
             ) {
-                Text("Sair da conta")
+                Text("Sair da conta", style = MaterialTheme.typography.labelLarge)
+            }
+
+            if (showLogoutDialog) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showLogoutDialog = false },
+                    title = { Text("Sair da conta?") },
+                    text = {
+                        Text(
+                            "Você precisará do seu token de 8 caracteres para entrar novamente. " +
+                                "Certifique-se de tê-lo anotado.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                showLogoutDialog = false
+                                authVm.logout()
+                            }
+                        ) {
+                            Text("Sair", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = { showLogoutDialog = false }
+                        ) {
+                            Text("Cancelar")
+                        }
+                    }
+                )
             }
         }
     }
@@ -401,6 +434,8 @@ private fun scaleCenterCrop(src: Bitmap, size: Int): Bitmap {
 
 private fun encodeBitmapToPng(bmp: Bitmap): ByteArray {
     val out = ByteArrayOutputStream()
-    bmp.compress(Bitmap.CompressFormat.PNG, 80, out)
+    // Use JPEG for photos (much smaller than PNG for the same quality).
+    // Quality 85 is visually indistinguishable from lossless for avatars.
+    bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
     return out.toByteArray()
 }

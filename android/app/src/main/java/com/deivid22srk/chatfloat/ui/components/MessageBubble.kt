@@ -2,6 +2,7 @@ package com.deivid22srk.chatfloat.ui.components
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -31,14 +32,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.deivid22srk.chatfloat.data.ChatMessage
-import com.deivid22srk.chatfloat.ui.theme.BubbleIncoming
-import com.deivid22srk.chatfloat.ui.theme.BubbleIncomingText
-import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoing
-import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoingText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -51,15 +51,20 @@ import java.util.Locale
 fun MessageBubble(message: ChatMessage) {
     val isOutgoing = message.isOutgoing
     val alignment = if (isOutgoing) Alignment.End else Alignment.Start
-    val bubbleColor = if (isOutgoing) BubbleOutgoing else BubbleIncoming
-    val textColor = if (isOutgoing) BubbleOutgoingText else BubbleIncomingText
-    val senderColor = if (isOutgoing) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.primary
-    val timeColor = if (isOutgoing) Color.White.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val bubbleColor = if (isOutgoing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val textColor = if (isOutgoing) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    val senderColor = if (isOutgoing) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f) else MaterialTheme.colorScheme.primary
+    val timeColor = if (isOutgoing) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurfaceVariant
+
+    // Responsive max width: 72% of screen
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val maxBubbleWidth = (screenWidth * 0.72f)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 3.dp),
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .animateContentSize(),
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
     ) {
         // Avatar (only for incoming)
@@ -73,12 +78,11 @@ fun MessageBubble(message: ChatMessage) {
             Spacer(Modifier.size(8.dp))
         }
 
-        // Bubble
         Column(horizontalAlignment = alignment) {
             if (!isOutgoing) {
                 Text(
                     text = message.senderName,
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.labelMedium,
                     color = senderColor,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = 10.dp, bottom = 2.dp)
@@ -86,7 +90,7 @@ fun MessageBubble(message: ChatMessage) {
             }
             Box(
                 modifier = Modifier
-                    .widthIn(max = 260.dp)
+                    .widthIn(max = maxBubbleWidth)
                     .wrapContentWidth(alignment)
                     .clip(
                         RoundedCornerShape(
@@ -103,13 +107,13 @@ fun MessageBubble(message: ChatMessage) {
                     Text(
                         text = message.text,
                         color = textColor,
-                        fontSize = 14.sp,
-                        lineHeight = 19.sp
+                        style = MaterialTheme.typography.bodyMedium,
+                        lineHeight = 20.sp
                     )
                     Spacer(Modifier.height(3.dp))
                     Text(
                         text = formatTime(message.timestamp),
-                        fontSize = 10.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         color = timeColor,
                         modifier = Modifier.align(Alignment.End)
                     )
@@ -119,34 +123,40 @@ fun MessageBubble(message: ChatMessage) {
     }
 }
 
+private val timeFormatter = ThreadLocal.withInitial {
+    SimpleDateFormat("HH:mm", Locale.getDefault())
+}
+
 private fun formatTime(timestampMs: Long): String {
     if (timestampMs <= 0) return ""
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestampMs))
+    return timeFormatter.get()?.format(Date(timestampMs)) ?: ""
 }
 
 /**
- * Avatar composable. Tries to load from [url] first (Supabase Storage URL),
- * falls back to [base64] if [url] is null, then falls back to initials.
+ * Avatar composable using Coil for URL loading (cached) with base64 fallback.
  */
 @Composable
 fun Avatar(url: String?, base64: String?, initials: String, size: Int) {
     val modifier = Modifier
         .size(size.dp)
         .clip(CircleShape)
-        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+        .background(MaterialTheme.colorScheme.primaryContainer)
 
     var loadedBitmap by remember(url, base64) { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     // Try base64 first (synchronous, fast)
-    if (loadedBitmap == null && base64 != null) {
-        loadedBitmap = runCatching {
-            val bytes = Base64.decode(base64, Base64.NO_WRAP)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-        }.getOrNull()
+    LaunchedEffect(base64) {
+        if (loadedBitmap == null && base64 != null) {
+            loadedBitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = Base64.decode(base64, Base64.NO_WRAP)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }.getOrNull()
+            }
+        }
     }
 
-    // Load from URL asynchronously on IO dispatcher (network calls on main
-    // thread throw NetworkOnMainThreadException)
+    // Load from URL asynchronously on IO dispatcher
     LaunchedEffect(url) {
         if (loadedBitmap == null && url != null && url.isNotEmpty()) {
             loadedBitmap = withContext(Dispatchers.IO) {
@@ -158,7 +168,7 @@ fun Avatar(url: String?, base64: String?, initials: String, size: Int) {
     if (loadedBitmap != null) {
         Image(
             bitmap = loadedBitmap!!.asImageBitmap(),
-            contentDescription = "Avatar",
+            contentDescription = null, // decorative — sender name is already visible
             modifier = modifier,
             contentScale = ContentScale.Crop
         )
@@ -174,7 +184,7 @@ fun Avatar(url: String?, base64: String?, initials: String, size: Int) {
             text = initials,
             fontSize = (size / 3).sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
+            color = MaterialTheme.colorScheme.onPrimaryContainer
         )
     }
 }

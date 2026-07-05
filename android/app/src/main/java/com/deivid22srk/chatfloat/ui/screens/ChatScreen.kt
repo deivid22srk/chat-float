@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.PictureInPicture
@@ -40,6 +43,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,10 +51,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deivid22srk.chatfloat.service.FloatingChatService
@@ -69,13 +74,31 @@ fun ChatScreen(
     val context = LocalContext.current
     val messages by viewModel.messages.collectAsState()
     val sending by viewModel.sending.collectAsState()
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
+    // Smart auto-scroll: only scroll to bottom if user is already near the bottom
+    // (not reading history)
+    val shouldAutoScroll by remember {
+        derivedStateOf {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems = listState.layoutInfo.totalItemsCount
+            totalItems > 0 && lastVisible >= totalItems - 2
+        }
+    }
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
+        if (messages.isNotEmpty() && shouldAutoScroll) {
             listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    fun sendMessage() {
+        if (input.isNotBlank() && !sending) {
+            viewModel.send(input)
+            input = ""
+            keyboardController?.hide()
         }
     }
 
@@ -84,47 +107,32 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(
-                                            MaterialTheme.colorScheme.primary,
-                                            MaterialTheme.colorScheme.secondary
-                                        )
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Avatar(
-                                url = avatarUrl,
-                                base64 = null,
-                                initials = username.take(2).uppercase(),
-                                size = 40
-                            )
-                        }
+                        Avatar(
+                            url = avatarUrl,
+                            base64 = null,
+                            initials = username.take(2).uppercase(),
+                            size = 36
+                        )
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
                                 "ChatFloat",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 17.sp,
-                                color = Color.White
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                fontWeight = FontWeight.Bold
                             )
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
                                         .size(7.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFF34D399))
+                                        .background(MaterialTheme.colorScheme.tertiary)
                                 )
                                 Spacer(Modifier.width(5.dp))
                                 Text(
                                     "Conectado como $username",
-                                    fontSize = 11.sp,
-                                    color = Color.White.copy(alpha = 0.85f)
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f)
                                 )
                             }
                         }
@@ -145,16 +153,18 @@ fun ChatScreen(
                             context.startService(intent)
                         }
                     }) {
-                        Icon(Icons.Filled.PictureInPicture, contentDescription = "Janela flutuante", tint = Color.White)
+                        Icon(Icons.Filled.PictureInPicture, contentDescription = "Janela flutuante",
+                            tint = MaterialTheme.colorScheme.onPrimary)
                     }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Configurações", tint = Color.White)
+                        Icon(Icons.Filled.Settings, contentDescription = "Configurações",
+                            tint = MaterialTheme.colorScheme.onPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = Color.White,
-                    actionIconContentColor = Color.White
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
         },
@@ -171,24 +181,26 @@ fun ChatScreen(
                     value = input,
                     onValueChange = { input = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Digite uma mensagem…", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
+                    placeholder = {
+                        Text(
+                            "Digite uma mensagem…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
                     maxLines = 4,
                     shape = RoundedCornerShape(24.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { sendMessage() }),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline,
                         focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 )
                 Spacer(Modifier.width(8.dp))
                 IconButton(
-                    onClick = {
-                        if (input.isNotBlank() && !sending) {
-                            viewModel.send(input)
-                            input = ""
-                        }
-                    },
+                    onClick = { sendMessage() },
                     enabled = input.isNotBlank() && !sending,
                     modifier = Modifier
                         .size(48.dp)
@@ -197,20 +209,23 @@ fun ChatScreen(
                             if (input.isNotBlank() && !sending)
                                 MaterialTheme.colorScheme.primary
                             else
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                MaterialTheme.colorScheme.surfaceVariant
                         )
                 ) {
                     if (sending) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onPrimary
                         )
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Enviar",
-                            tint = Color.White
+                            tint = if (input.isNotBlank())
+                                MaterialTheme.colorScheme.onPrimary
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -229,15 +244,14 @@ fun ChatScreen(
                 ) {
                     Text(
                         "Sem mensagens ainda",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                     )
                     Spacer(Modifier.size(4.dp))
                     Text(
                         "Diga oi! 👋",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
