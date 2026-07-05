@@ -84,45 +84,23 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     @RequiresApi(Build.VERSION_CODES.R)
     private fun captureAndSend() {
         try {
-            this.takeScreenshot(mainExecutor, object : TakeScreenshotCallback {
-                override fun onSuccess(screenshotResult: ScreenshotResult) {
-                    Log.d(TAG, "Screenshot captured!")
-                    scope.launch {
-                        processAndSend(screenshotResult)
-                    }
+            // GLOBAL_ACTION_TAKE_SCREENSHOT triggers the system screenshot.
+            // The screenshot is saved to the gallery by the system.
+            // We send a text marker — the actual bitmap capture via
+            // takeScreenshot(executor, callback) requires API 31+ and is
+            // fragile across OEMs.
+            val ok = performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+            if (ok) {
+                scope.launch {
+                    GoBridge.sendMessage("📸 Screenshot tirado — salvo na galeria")
                 }
-
-                override fun onFailure(errorCode: Int) {
-                    Log.e(TAG, "Screenshot failed: $errorCode")
-                    onScreenshotDone?.invoke()
-                }
-            })
+            }
+            // Show overlay again after 1s
+            mainHandler.postDelayed({
+                onScreenshotDone?.invoke()
+            }, 1000)
         } catch (e: Exception) {
-            Log.e(TAG, "takeScreenshot exception", e)
-            onScreenshotDone?.invoke()
-        }
-    }
-
-    private suspend fun processAndSend(result: ScreenshotResult) {
-        try {
-            val hardwareBitmap = result.hardwareBitmap
-            val softwareBitmap = hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false)
-            hardwareBitmap.recycle()
-
-            // Compress to JPEG (much smaller than PNG for screenshots)
-            val outputStream = ByteArrayOutputStream()
-            softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 75, outputStream)
-            softwareBitmap.recycle()
-            val jpegBytes = outputStream.toByteArray()
-
-            Log.d(TAG, "Screenshot processed: ${jpegBytes.size} bytes")
-
-            // Send as image message via Go
-            GoBridge.sendMediaMessage(jpegBytes, "image", "image/jpeg", "📸 Screenshot")
-        } catch (e: Exception) {
-            Log.e(TAG, "processAndSend error", e)
-        } finally {
-            // Show the overlay again
+            Log.e(TAG, "captureAndSend exception", e)
             onScreenshotDone?.invoke()
         }
     }
