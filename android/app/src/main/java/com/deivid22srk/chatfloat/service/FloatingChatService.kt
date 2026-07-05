@@ -41,8 +41,8 @@ import kotlinx.coroutines.launch
 /**
  * Foreground service that shows a floating chat overlay above other apps.
  *
- * Now backed by the Go library (libchatfloat.so) — all Telegram communication
- * happens in Go. This service just reads cached messages from Go every 500ms
+ * Now backed by the Go library (libchatfloat.so) — all Supabase communication
+ * happens in Go. This service just reads cached messages from Go every 2s
  * and renders them as a TextView.
  */
 class FloatingChatService : Service() {
@@ -252,7 +252,7 @@ class FloatingChatService : Service() {
                     val msgs = GoBridge.getMessages()
                     updateMessagesText(msgs)
                 }
-                delay(500)
+                delay(2000)
             }
         }
     }

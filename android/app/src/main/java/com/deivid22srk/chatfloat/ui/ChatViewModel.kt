@@ -25,9 +25,8 @@ class ChatViewModel : ViewModel() {
     private var pollingJob: Job? = null
 
     /**
-     * Starts polling Go for new messages. The Go side handles the actual
-     * long-polling of Telegram in a goroutine, so we just refresh our local
-     * copy every 500ms.
+     * Polls Go for new messages. The Go side fetches messages from Supabase
+     * on each call, so we just refresh our local copy every 2s.
      */
     fun startPolling() {
         if (pollingJob != null) return
@@ -36,7 +35,7 @@ class ChatViewModel : ViewModel() {
                 runCatching {
                     _messages.value = GoBridge.getMessages()
                 }
-                delay(500)
+                delay(2000)
             }
         }
     }

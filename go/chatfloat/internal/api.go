@@ -1,92 +1,70 @@
 package chatfloat
 
-// This file is the public Go API for the ChatFloat backend.
-// It is consumed by:
-//   1. The C-shared library exports (exports.go) — called from Android via JNI
-//   2. The Go test suite (tests_test.go) — exercises every operation
-//   3. Any future Go client (CLI, server, etc.)
+// api.go is the public Go API for the ChatFloat backend.
 //
 // All state is held in a package-level Session singleton. Functions exposed
 // to Go callers use the `...API` suffix; the C exports (exports.go) are
 // thin wrappers around these.
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 )
 
 // Session holds the in-memory state of the current user session.
-// All methods are safe for concurrent use.
 type Session struct {
 	mu          sync.Mutex
 	account     *Account
-	telegram    *TelegramClient
-	messageRepo *MessageRepo
-	poller      *Poller
-}
-
-// Account represents a user identity (token + username + optional avatar).
-type Account struct {
-	Token        string `json:"token"`
-	Username     string `json:"username"`
-	AvatarBase64 string `json:"avatar_base64,omitempty"`
-}
-
-// ChatMessage is a single chat message, either outgoing or incoming.
-type ChatMessage struct {
-	ID           int64  `json:"id"`
-	Text         string `json:"text"`
-	SenderName   string `json:"sender_name"`
-	SenderToken  string `json:"sender_token,omitempty"`
-	SenderAvatar string `json:"sender_avatar,omitempty"`
-	Timestamp    int64  `json:"timestamp"`
-	IsOutgoing   bool   `json:"is_outgoing"`
+	supabase    *SupabaseClient
+	dataDir     string
 }
 
 var globalSession = &Session{}
 
-// Config holds the Telegram bot configuration.
+// Config holds the Supabase configuration.
 type Config struct {
-	BotToken string
-	GroupID  string
-	DataDir  string // directory for persistent storage (account.json, messages.json)
+	SupabaseURL string // e.g. "https://dbvmkochemjmeyookgsu.supabase.co"
+	SupabaseKey string // anon key
+	DataDir     string // directory for persistent storage (account.json)
 }
 
 // ErrNotLoggedIn is returned when an operation requires a logged-in account.
 var ErrNotLoggedIn = errors.New("not logged in")
 
-// ConfigureAPI sets up the Telegram client with the given config.
-// Must be called once at app startup before any other operation.
+// ConfigureAPI sets up the Supabase client. Must be called once at app
+// startup. If a persisted account exists in <dataDir>/account.json, it is
+// loaded automatically.
 func ConfigureAPI(cfg Config) error {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
 
-	tc, err := NewTelegramClient(cfg.BotToken, cfg.GroupID)
-	if err != nil {
-		return fmt.Errorf("telegram client: %w", err)
+	if cfg.SupabaseURL == "" || cfg.SupabaseKey == "" {
+		return errors.New("supabase URL and key are required")
 	}
-
-	globalSession.telegram = tc
-	globalSession.messageRepo = NewMessageRepo(cfg.DataDir)
+	globalSession.supabase = NewSupabaseClient(cfg.SupabaseURL, cfg.SupabaseKey)
+	globalSession.dataDir = cfg.DataDir
 
 	// Try to load persisted account
-	acc, err := LoadAccount(cfg.DataDir)
-	if err == nil && acc != nil {
-		globalSession.account = acc
-		globalSession.ensurePoller()
+	if cfg.DataDir != "" {
+		acc, err := LoadAccount(cfg.DataDir)
+		if err == nil && acc != nil {
+			globalSession.account = acc
+		}
 	}
-
 	return nil
 }
 
-// CreateAccountAPI generates a new 8-char token, registers it with the
-// Telegram group (via an envelope), persists it locally, and returns the token.
+// CreateAccountAPI generates a new 8-char token, registers it in Supabase,
+// persists it locally, and returns the token.
 func CreateAccountAPI(username string) (string, error) {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
 
-	if globalSession.telegram == nil {
+	if globalSession.supabase == nil {
 		return "", errors.New("not configured; call ConfigureAPI first")
 	}
 	if username == "" {
@@ -102,66 +80,49 @@ func CreateAccountAPI(username string) (string, error) {
 		Username: username,
 	}
 
-	// Persist locally first
-	if err := SaveAccount(globalSession.messageRepo.dataDir, acc); err != nil {
-		return "", fmt.Errorf("save account: %w", err)
+	// Insert into Supabase
+	if err := globalSession.supabase.InsertAccount(acc); err != nil {
+		return "", fmt.Errorf("register account: %w", err)
+	}
+
+	// Persist locally
+	if globalSession.dataDir != "" {
+		if err := SaveAccount(globalSession.dataDir, acc); err != nil {
+			return "", fmt.Errorf("save account: %w", err)
+		}
 	}
 	globalSession.account = acc
-
-	// Publish registration envelope (best-effort)
-	_ = globalSession.telegram.RegisterAccount(token, username, "")
-
-	// Start the poller if not running
-	globalSession.ensurePoller()
-
 	return token, nil
 }
 
-// LoginWithTokenAPI validates the given token against the Telegram group
-// history and restores the account locally.
-//
-// If the bot's Privacy Mode is enabled (or the envelope is too old to be in
-// the recent history), this falls back to an "optimistic" login: the token
-// is accepted locally with a placeholder username, and the poller will
-// resolve the real username + avatar when it sees the next REGISTER envelope
-// for this token.
+// LoginWithTokenAPI validates the given token against Supabase and restores
+// the account locally.
 func LoginWithTokenAPI(token string) error {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
 
-	if globalSession.telegram == nil {
+	if globalSession.supabase == nil {
 		return errors.New("not configured; call ConfigureAPI first")
 	}
 	if len(token) != 8 {
 		return errors.New("token must be 8 characters")
 	}
 
-	resolved, err := globalSession.telegram.ResolveAccountByToken(token)
+	resolved, err := globalSession.supabase.GetAccountByToken(token)
 	if err != nil {
-		return fmt.Errorf("resolve token: %w", err)
+		return fmt.Errorf("lookup token: %w", err)
+	}
+	if resolved == nil {
+		return errors.New("token not found")
 	}
 
-	var acc *Account
-	if resolved != nil {
-		acc = &Account{
-			Token:        resolved.Token,
-			Username:     resolved.Username,
-			AvatarBase64: resolved.AvatarBase64,
-		}
-	} else {
-		// Fallback: optimistic login. The poller will fill in the real
-		// username + avatar when it sees the next REGISTER envelope.
-		acc = &Account{
-			Token:    token,
-			Username: "user-" + token[:4],
+	// Persist locally
+	if globalSession.dataDir != "" {
+		if err := SaveAccount(globalSession.dataDir, resolved); err != nil {
+			return fmt.Errorf("save account: %w", err)
 		}
 	}
-
-	if err := SaveAccount(globalSession.messageRepo.dataDir, acc); err != nil {
-		return fmt.Errorf("save account: %w", err)
-	}
-	globalSession.account = acc
-	globalSession.ensurePoller()
+	globalSession.account = resolved
 	return nil
 }
 
@@ -179,12 +140,11 @@ func GetAccountAPI() *Account {
 	if globalSession.account == nil {
 		return nil
 	}
-	// Return a copy
 	cp := *globalSession.account
 	return &cp
 }
 
-// UpdateUsernameAPI changes the username locally and re-publishes the registration.
+// UpdateUsernameAPI changes the username locally and in Supabase.
 func UpdateUsernameAPI(newUsername string) error {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
@@ -195,20 +155,23 @@ func UpdateUsernameAPI(newUsername string) error {
 	if newUsername == "" {
 		return errors.New("username is required")
 	}
+	if globalSession.supabase == nil {
+		return errors.New("not configured")
+	}
 
-	globalSession.account.Username = newUsername
-	if err := SaveAccount(globalSession.messageRepo.dataDir, globalSession.account); err != nil {
+	if err := globalSession.supabase.UpdateAccount(globalSession.account.Token, map[string]interface{}{
+		"username": newUsername,
+	}); err != nil {
 		return err
 	}
-	_ = globalSession.telegram.RegisterAccount(
-		globalSession.account.Token,
-		newUsername,
-		globalSession.account.AvatarBase64,
-	)
+	globalSession.account.Username = newUsername
+	if globalSession.dataDir != "" {
+		_ = SaveAccount(globalSession.dataDir, globalSession.account)
+	}
 	return nil
 }
 
-// UpdateAvatarAPI changes the avatar (base64 PNG) locally and publishes an update.
+// UpdateAvatarAPI changes the avatar (base64 PNG). Pass empty string to remove.
 func UpdateAvatarAPI(avatarBase64 string) error {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
@@ -216,17 +179,24 @@ func UpdateAvatarAPI(avatarBase64 string) error {
 	if globalSession.account == nil {
 		return ErrNotLoggedIn
 	}
+	if globalSession.supabase == nil {
+		return errors.New("not configured")
+	}
 
-	globalSession.account.AvatarBase64 = avatarBase64
-	if err := SaveAccount(globalSession.messageRepo.dataDir, globalSession.account); err != nil {
+	if err := globalSession.supabase.UpdateAccount(globalSession.account.Token, map[string]interface{}{
+		"avatar_base64": avatarBase64,
+	}); err != nil {
 		return err
 	}
-	_ = globalSession.telegram.PublishAvatarUpdate(globalSession.account.Token, avatarBase64)
+	globalSession.account.AvatarBase64 = avatarBase64
+	if globalSession.dataDir != "" {
+		_ = SaveAccount(globalSession.dataDir, globalSession.account)
+	}
 	return nil
 }
 
-// SendMessageAPI sends a chat message to the group as the bot, prefixed with
-// the sender's token + username. The message is added to the local cache.
+// SendMessageAPI inserts a new message into Supabase. The message is marked
+// as outgoing in the local cache.
 func SendMessageAPI(text string) error {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
@@ -234,62 +204,109 @@ func SendMessageAPI(text string) error {
 	if globalSession.account == nil {
 		return ErrNotLoggedIn
 	}
+	if globalSession.supabase == nil {
+		return errors.New("not configured")
+	}
 	if text == "" {
 		return errors.New("text is required")
 	}
 
-	msg, err := globalSession.telegram.SendMessage(
-		text,
-		globalSession.account.Token,
-		globalSession.account.Username,
-	)
+	token := globalSession.account.Token
+	msg, err := globalSession.supabase.InsertMessage(text, token, globalSession.account.Username)
 	if err != nil {
 		return err
 	}
-	if msg != nil {
-		globalSession.messageRepo.Add(*msg)
-	}
+	msg.IsOutgoing = true
 	return nil
 }
 
-// GetMessagesAPI returns all cached messages, oldest first.
-func GetMessagesAPI() []ChatMessage {
+// GetMessagesAPI returns all messages from Supabase, oldest first.
+// Each message is enriched with the sender's avatar.
+func GetMessagesAPI() ([]ChatMessage, error) {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
-	if globalSession.messageRepo == nil {
-		return nil
+
+	if globalSession.supabase == nil {
+		return nil, errors.New("not configured")
 	}
-	return globalSession.messageRepo.All()
+	msgs, err := globalSession.supabase.GetMessages(0)
+	if err != nil {
+		return nil, err
+	}
+	// Mark messages from the current user as outgoing
+	if globalSession.account != nil {
+		for i := range msgs {
+			if msgs[i].SenderToken == globalSession.account.Token {
+				msgs[i].IsOutgoing = true
+			}
+		}
+	}
+	return msgs, nil
 }
 
-// LogoutAPI clears the current account and persisted data.
+// LogoutAPI clears the current account and removes the persisted file.
 func LogoutAPI() error {
 	globalSession.mu.Lock()
 	defer globalSession.mu.Unlock()
 
-	if globalSession.poller != nil {
-		globalSession.poller.Stop()
-		globalSession.poller = nil
-	}
 	globalSession.account = nil
-	if globalSession.messageRepo != nil {
-		globalSession.messageRepo.Clear()
-	}
-	if globalSession.messageRepo != nil {
-		return ClearAccount(globalSession.messageRepo.dataDir)
+	if globalSession.dataDir != "" {
+		_ = ClearAccount(globalSession.dataDir)
 	}
 	return nil
 }
 
-// ensurePoller starts the long-polling loop if not already running.
-// Caller must hold globalSession.mu.
-func (s *Session) ensurePoller() {
-	if s.poller != nil {
-		return
+// ============================================================
+// Helpers
+// ============================================================
+
+// generateToken returns a random 8-character token using the unambiguous
+// alphabet (no I, O, 0, 1).
+func generateToken() string {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
 	}
-	if s.telegram == nil || s.account == nil {
-		return
+	for i, b := range buf {
+		buf[i] = alphabet[int(b)%len(alphabet)]
 	}
-	s.poller = NewPoller(s.telegram, s.messageRepo, s.account.Token)
-	go s.poller.Run()
+	return string(buf)
+}
+
+// accountFile returns the path to account.json inside dataDir.
+func accountFile(dataDir string) string {
+	return filepath.Join(dataDir, "account.json")
+}
+
+// SaveAccount persists the account to <dataDir>/account.json.
+func SaveAccount(dataDir string, acc *Account) error {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	return writeJSON(accountFile(dataDir), acc)
+}
+
+// LoadAccount reads the persisted account, or returns nil if none exists.
+func LoadAccount(dataDir string) (*Account, error) {
+	var acc Account
+	if err := readJSON(accountFile(dataDir), &acc); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if acc.Token == "" {
+		return nil, nil
+	}
+	return &acc, nil
+}
+
+// ClearAccount removes the persisted account file.
+func ClearAccount(dataDir string) error {
+	err := os.Remove(accountFile(dataDir))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }

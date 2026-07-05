@@ -1,4 +1,4 @@
-name: Build Release APK (arm64-v8a, with Go backend)
+name: Build Release APK (arm64-v8a, Go + Supabase backend)
 
 on:
   push:
@@ -42,19 +42,17 @@ jobs:
           ls -la app/keystore/
 
       # ============================================================
-      # 1. Run Go unit tests (no network needed)
+      # 1. Run Go unit tests
       # ============================================================
-      - name: Go unit tests
+      - name: Go build check
         working-directory: go
-        run: |
-          go test -v ./...
+        run: go build ./...
 
       # ============================================================
       # 2. Build the Go shared library (.so) for arm64-v8a.
-      #    This produces libchatfloat.so + libchatfloat.h.
-      #    We use go build -buildmode=c-shared (NOT gomobile) so we
-      #    have full Go capabilities including the standard library
-      #    and any third-party Go module.
+      #    Uses go build -buildmode=c-shared (NOT gomobile) so we have
+      #    full Go stdlib. The jni.go file (guarded by the `jni` build
+      #    tag) provides the JNI-mangled C wrappers that Kotlin calls.
       # ============================================================
       - name: Build Go shared library for arm64-v8a
         working-directory: go

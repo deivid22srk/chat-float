@@ -2,26 +2,18 @@
 
 package chatfloat
 
-// tests_test.go exercises the full Go API against the real Telegram Bot API.
-// Run with:
-//   go test -v -tags integration -timeout 120s ./...
-//
-// These tests require network access and use the configured bot token / group.
-// They are tagged with `// +build integration` so they don't run by default
-// during CI unit-test phases, but DO run when invoked explicitly.
+// tests_test.go exercises the full Go API against the real Supabase project.
+// Run with: go test -v -tags integration -timeout 60s ./...
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 const (
-	testBotToken = "7594927232:AAFh5T_zZvPtqvoGpyGVO-Kd8uGVDKdp3LE"
-	testGroupID  = "-1004384994615"
+	testSupabaseURL = "https://dbvmkochemjmeyookgsu.supabase.co"
+	testSupabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRidm1rb2NoZW1qbWV5b29rZ3N1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1OTA3MjIsImV4cCI6MjA5NTE2NjcyMn0.oAYv4hqQfnltl5sDmSTRwlkBfBeapCfxj7xaXyDqt78"
 )
 
 func tempDataDir(t *testing.T) string {
@@ -36,9 +28,9 @@ func tempDataDir(t *testing.T) string {
 func TestIntegration_Configure(t *testing.T) {
 	dir := tempDataDir(t)
 	if err := ConfigureAPI(Config{
-		BotToken: testBotToken,
-		GroupID:  testGroupID,
-		DataDir:  dir,
+		SupabaseURL: testSupabaseURL,
+		SupabaseKey: testSupabaseKey,
+		DataDir:     dir,
 	}); err != nil {
 		t.Fatalf("ConfigureAPI failed: %v", err)
 	}
@@ -51,9 +43,9 @@ func TestIntegration_Configure(t *testing.T) {
 func TestIntegration_CreateAccountAndLogin(t *testing.T) {
 	dir := tempDataDir(t)
 	if err := ConfigureAPI(Config{
-		BotToken: testBotToken,
-		GroupID:  testGroupID,
-		DataDir:  dir,
+		SupabaseURL: testSupabaseURL,
+		SupabaseKey: testSupabaseKey,
+		DataDir:     dir,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +67,6 @@ func TestIntegration_CreateAccountAndLogin(t *testing.T) {
 		t.Errorf("GetAccountAPI returned %v, expected token %s", acc, token)
 	}
 
-	// Persisted?
-	if _, err := os.Stat(filepath.Join(dir, "account.json")); err != nil {
-		t.Errorf("account.json not created: %v", err)
-	}
-
 	// Logout
 	if err := LogoutAPI(); err != nil {
 		t.Fatal(err)
@@ -88,35 +75,16 @@ func TestIntegration_CreateAccountAndLogin(t *testing.T) {
 		t.Error("expected logged out after Logout")
 	}
 
-	// Reconfigure (should NOT auto-login because we cleared)
-	if err := ConfigureAPI(Config{
-		BotToken: testBotToken,
-		GroupID:  testGroupID,
-		DataDir:  dir,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if IsLoggedInAPI() {
-		t.Error("expected not logged in after reconfigure + clear")
-	}
-
-	// Wait for the registration envelope to propagate through Telegram
-	t.Log("Waiting 3s for Telegram to propagate the registration envelope...")
-	time.Sleep(3 * time.Second)
-
-	// Login with the token we just created.
-	// If the bot's Privacy Mode is disabled, ResolveAccountByToken will find
-	// the envelope and restore the exact username. If Privacy Mode is enabled
-	// (default), the token is accepted optimistically with a placeholder
-	// username, and the poller will resolve the real one later.
+	// Login with the token — should resolve from Supabase
 	if err := LoginWithTokenAPI(token); err != nil {
 		t.Fatalf("LoginWithTokenAPI(%s): %v", token, err)
 	}
-
-	// Verify the account is restored
 	acc = GetAccountAPI()
 	if acc == nil || acc.Token != token {
 		t.Errorf("after login, account = %v, expected token %s", acc, token)
+	}
+	if acc != nil && acc.Username != username {
+		t.Errorf("after login, username = %q, expected %q", acc.Username, username)
 	}
 	t.Logf("Login OK: %+v", acc)
 
@@ -126,9 +94,9 @@ func TestIntegration_CreateAccountAndLogin(t *testing.T) {
 func TestIntegration_SendMessageAndGetMessages(t *testing.T) {
 	dir := tempDataDir(t)
 	if err := ConfigureAPI(Config{
-		BotToken: testBotToken,
-		GroupID:  testGroupID,
-		DataDir:  dir,
+		SupabaseURL: testSupabaseURL,
+		SupabaseKey: testSupabaseKey,
+		DataDir:     dir,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,36 +108,37 @@ func TestIntegration_SendMessageAndGetMessages(t *testing.T) {
 	t.Logf("Sender token: %s", token)
 
 	// Send a message
-	msgText := "Hello from Go test at " + time.Now().Format(time.RFC3339)
+	msgText := "Hello from Go test"
 	if err := SendMessageAPI(msgText); err != nil {
 		t.Fatalf("SendMessageAPI: %v", err)
 	}
 
-	// Verify it's in the cache
-	msgs := GetMessagesAPI()
+	// Fetch messages — should include our sent message
+	msgs, err := GetMessagesAPI()
+	if err != nil {
+		t.Fatalf("GetMessagesAPI: %v", err)
+	}
 	if len(msgs) == 0 {
-		t.Fatal("expected at least 1 message in cache")
-	}
-	last := msgs[len(msgs)-1]
-	if last.Text != msgText {
-		t.Errorf("last message text = %q, expected %q", last.Text, msgText)
-	}
-	if !last.IsOutgoing {
-		t.Error("expected last message to be outgoing")
-	}
-	if last.SenderToken != token {
-		t.Errorf("last message sender token = %q, expected %q", last.SenderToken, token)
-	}
-	t.Logf("Message sent: id=%d text=%q", last.ID, last.Text)
-
-	// Persisted?
-	if _, err := os.Stat(filepath.Join(dir, "messages.json")); err != nil {
-		t.Errorf("messages.json not created: %v", err)
+		t.Fatal("expected at least 1 message")
 	}
 
-	// Verify JSON serialization shape
-	data, _ := json.Marshal(msgs)
-	t.Logf("Messages JSON: %s", string(data))
+	// Find our message
+	var found *ChatMessage
+	for i := range msgs {
+		if msgs[i].Text == msgText && msgs[i].SenderToken == token {
+			found = &msgs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Errorf("sent message not found in results. Messages: %+v", msgs)
+	} else {
+		t.Logf("Found sent message: id=%d text=%q outgoing=%v",
+			found.ID, found.Text, found.IsOutgoing)
+		if !found.IsOutgoing {
+			t.Error("expected our message to be marked outgoing")
+		}
+	}
 
 	_ = LogoutAPI()
 }
@@ -177,9 +146,9 @@ func TestIntegration_SendMessageAndGetMessages(t *testing.T) {
 func TestIntegration_UpdateUsernameAndAvatar(t *testing.T) {
 	dir := tempDataDir(t)
 	if err := ConfigureAPI(Config{
-		BotToken: testBotToken,
-		GroupID:  testGroupID,
-		DataDir:  dir,
+		SupabaseURL: testSupabaseURL,
+		SupabaseKey: testSupabaseKey,
+		DataDir:     dir,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +169,7 @@ func TestIntegration_UpdateUsernameAndAvatar(t *testing.T) {
 	}
 	t.Logf("Username updated to: %s", acc.Username)
 
-	// Update avatar (tiny 1x1 PNG, base64-encoded)
+	// Update avatar (tiny 1x1 PNG, base64)
 	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 	if err := UpdateAvatarAPI(png); err != nil {
 		t.Fatalf("UpdateAvatarAPI: %v", err)
@@ -210,6 +179,46 @@ func TestIntegration_UpdateUsernameAndAvatar(t *testing.T) {
 		t.Errorf("avatar not updated: %+v", acc)
 	}
 	t.Log("Avatar updated OK")
+
+	_ = LogoutAPI()
+}
+
+func TestIntegration_PersistenceAcrossConfigure(t *testing.T) {
+	dir := tempDataDir(t)
+
+	// First session: create account
+	if err := ConfigureAPI(Config{
+		SupabaseURL: testSupabaseURL,
+		SupabaseKey: testSupabaseKey,
+		DataDir:     dir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := CreateAccountAPI("persist_" + strings.ToLower(generateToken()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalUsername := GetAccountAPI().Username
+
+	// Second session: reconfigure with same dataDir — should auto-login
+	if err := ConfigureAPI(Config{
+		SupabaseURL: testSupabaseURL,
+		SupabaseKey: testSupabaseKey,
+		DataDir:     dir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !IsLoggedInAPI() {
+		t.Fatal("expected auto-login after reconfigure with persisted account")
+	}
+	acc := GetAccountAPI()
+	if acc.Token != token {
+		t.Errorf("after reconfigure, token = %s, expected %s", acc.Token, token)
+	}
+	if acc.Username != originalUsername {
+		t.Errorf("after reconfigure, username = %q, expected %q", acc.Username, originalUsername)
+	}
+	t.Logf("Persistence OK: %+v", acc)
 
 	_ = LogoutAPI()
 }

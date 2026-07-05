@@ -27,12 +27,12 @@ class AuthViewModel : ViewModel() {
 
     fun init(context: Context) {
         viewModelScope.launch {
-            // Configure the Go backend with the bot token, group ID, and
-            // a writable directory for persistent storage.
+            // Configure the Go backend with Supabase credentials and a
+            // writable directory for persistent storage of the local account.
             val dataDir = context.filesDir.absolutePath + "/chatfloat"
             GoBridge.configure(
-                botToken = BuildConfig.TELEGRAM_BOT_TOKEN,
-                groupID = BuildConfig.TELEGRAM_GROUP_ID,
+                supabaseURL = BuildConfig.SUPABASE_URL,
+                supabaseKey = BuildConfig.SUPABASE_ANON_KEY,
                 dataDir = dataDir
             )
             refreshState()

@@ -14,15 +14,15 @@ android {
         applicationId = "com.deivid22srk.chatfloat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "4.0.0"
+        versionCode = 5
+        versionName = "5.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
 
-        // Telegram Bot API config (still needed because we pass it to Go)
-        buildConfigField("String", "TELEGRAM_BOT_TOKEN", "\"7594927232:AAFh5T_zZvPtqvoGpyGVO-Kd8uGVDKdp3LE\"")
-        buildConfigField("String", "TELEGRAM_GROUP_ID", "\"-1004384994615\"")
+        // Supabase config via BuildConfig (passed to Go at runtime)
+        buildConfigField("String", "SUPABASE_URL", "\"https://dbvmkochemjmeyookgsu.supabase.co\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRidm1rb2NoZW1qbWV5b29rZ3N1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1OTA3MjIsImV4cCI6MjA5NTE2NjcyMn0.oAYv4hqQfnltl5sDmSTRwlkBfBeapCfxj7xaXyDqt78\"")
 
         // Build only arm64-v8a to keep the APK small.
         // The Go shared library is only compiled for this ABI.

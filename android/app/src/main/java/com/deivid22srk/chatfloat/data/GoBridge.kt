@@ -46,8 +46,8 @@ object GoBridge {
     // Native function declarations (must match exports.go signatures)
     // ============================================================
 
-    /** Configure(botToken, groupID, dataDir) -> json */
-    private external fun Configure(botToken: String, groupID: String, dataDir: String): String
+    /** Configure(supabaseURL, supabaseKey, dataDir) -> json */
+    private external fun Configure(supabaseURL: String, supabaseKey: String, dataDir: String): String
 
     /** CreateAccount(username) -> json */
     private external fun CreateAccount(username: String): String
@@ -87,10 +87,10 @@ object GoBridge {
         false
     }
 
-    suspend fun configure(botToken: String, groupID: String, dataDir: String): Result<Unit> =
+    suspend fun configure(supabaseURL: String, supabaseKey: String, dataDir: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val resp = call { Configure(botToken, groupID, dataDir) }
+                val resp = call { Configure(supabaseURL, supabaseKey, dataDir) }
                 if (!resp.ok) throw RuntimeException(resp.error)
             }
         }
