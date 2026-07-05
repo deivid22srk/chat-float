@@ -289,11 +289,11 @@ class FloatingChatService : Service() {
             gravity = Gravity.START
         }
 
-        val btnScreenshot = makeActionButton(dp, "📸", "Screenshot")
+        val btnQuickEmoji = makeActionButton(dp, "👍", "Like")
         val btnCopy = makeActionButton(dp, "📋", "Copiar")
         val btnClear = makeActionButton(dp, "🗑", "Limpar")
         val btnScroll = makeActionButton(dp, "⬇", "Rolar")
-        actionRow.addView(btnScreenshot)
+        actionRow.addView(btnQuickEmoji)
         actionRow.addView(btnCopy)
         actionRow.addView(btnClear)
         actionRow.addView(btnScroll)
@@ -406,7 +406,9 @@ class FloatingChatService : Service() {
             scope.launch { GoBridge.sendMessage(text.trim()) }
         }
 
-        btnScreenshot.setOnClickListener { handleScreenshot() }
+        btnQuickEmoji.setOnClickListener {
+            scope.launch { GoBridge.sendMessage("👍") }
+        }
         btnCopy.setOnClickListener { handleCopyLastMessage() }
         btnClear.setOnClickListener { handleClearDisplay() }
         btnScroll.setOnClickListener {
@@ -642,18 +644,6 @@ class FloatingChatService : Service() {
     // ============================================================
     // Action panel handlers
     // ============================================================
-
-    private fun handleScreenshot() {
-        Toast.makeText(this, "Solicitando permissão para captura de tela…", Toast.LENGTH_SHORT).show()
-        // Launch MainActivity to request MediaProjection permission.
-        // The ScreenshotManager (held by MainActivity) will capture the screen
-        // and send a chat message after the user grants permission.
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            putExtra("REQUEST_SCREEN_CAPTURE", true)
-        }
-        startActivity(intent)
-    }
 
     private fun handleCopyLastMessage() {
         val last = cachedMessages.lastOrNull { !it.isOutgoing } ?: run {

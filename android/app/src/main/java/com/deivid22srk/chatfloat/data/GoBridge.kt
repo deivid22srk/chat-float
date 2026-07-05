@@ -158,12 +158,16 @@ object GoBridge {
             }
         }
 
-    /** Legacy: accepts base64-encoded PNG. Decoded and forwarded to updateAvatarBytes. */
+    /** Legacy: accepts base64-encoded PNG. Decoded and forwarded to UpdateAvatarAPI
+     *  which uploads to Supabase Storage. This is the PREFERRED path for passing
+     *  image data through JNI (string parameter is more reliable than byte[]). */
     suspend fun updateAvatar(avatarBase64: String?): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
+                Log.d(TAG, "updateAvatar called, base64 length=${avatarBase64?.length ?: 0}")
                 val resp = call { UpdateAvatar(avatarBase64 ?: "") }
-                if (!resp.ok) throw RuntimeException(resp.error)
+                Log.d(TAG, "updateAvatar response: ok=${resp.ok} error=${resp.error}")
+                if (!resp.ok) throw RuntimeException(resp.error ?: "unknown error")
             }
         }
 

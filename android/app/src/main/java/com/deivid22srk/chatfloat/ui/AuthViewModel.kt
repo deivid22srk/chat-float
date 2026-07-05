@@ -104,14 +104,22 @@ class AuthViewModel : ViewModel() {
         }
     }
 
-    /** Uploads raw PNG bytes to Supabase Storage. Pass null/empty to remove.
-     *  Sets isSaving=true during the operation, false after. Shows errors in _error. */
+    /** Uploads avatar as base64-encoded PNG to Supabase Storage.
+     *  Pass null/empty to remove. Uses the base64 JNI path (more reliable
+     *  than passing raw byte arrays through JNI). */
     fun updateAvatarBytes(pngBytes: ByteArray?) {
         val state = _state.value as? AuthState.Authenticated ?: return
         viewModelScope.launch {
             _isSaving.value = true
             _error.value = null
-            GoBridge.updateAvatarBytes(pngBytes)
+            // Convert to base64 string and use the legacy UpdateAvatar path,
+            // which is more reliable through JNI than UpdateAvatarBytes.
+            val base64Str = if (pngBytes != null && pngBytes.isNotEmpty()) {
+                android.util.Base64.encodeToString(pngBytes, android.util.Base64.NO_WRAP)
+            } else {
+                ""
+            }
+            GoBridge.updateAvatar(base64Str)
                 .onSuccess {
                     refreshState()
                 }
