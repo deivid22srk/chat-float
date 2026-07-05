@@ -467,6 +467,16 @@ class FloatingChatService : Service() {
             rootView?.let { windowManager.updateViewLayout(it, p) }
         }
         minimizedParams = expandedParams
+        // Mark current last message as seen so popup only triggers for
+        // messages arriving AFTER the user minimized.
+        scope.launch {
+            runCatching {
+                val msgs = GoBridge.getMessages()
+                if (msgs.isNotEmpty()) {
+                    lastSeenMessageId = msgs.last().id
+                }
+            }
+        }
     }
 
     private fun expand() {
@@ -482,9 +492,18 @@ class FloatingChatService : Service() {
             p.height = WindowManager.LayoutParams.WRAP_CONTENT
             rootView?.let { windowManager.updateViewLayout(it, p) }
         }
-        // Mark messages as seen
+        // Mark the current last message as seen so we don't re-popup old
+        // messages next time we minimize. Fetch the latest from Go.
         bubbleHideJob?.cancel()
         minimizedBubbleView?.visibility = View.GONE
+        scope.launch {
+            runCatching {
+                val msgs = GoBridge.getMessages()
+                if (msgs.isNotEmpty()) {
+                    lastSeenMessageId = msgs.last().id
+                }
+            }
+        }
     }
 
     // ============================================================
@@ -540,8 +559,10 @@ class FloatingChatService : Service() {
         textView.text = sb
         scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
 
-        // Track the latest message id
-        if (msgs.isNotEmpty()) {
+        // Only mark messages as "seen" when the window is EXPANDED (user is
+        // actually looking at them). When minimized, we keep lastSeenMessageId
+        // unchanged so that new incoming messages trigger the popup.
+        if (!isMinimized && msgs.isNotEmpty()) {
             lastSeenMessageId = msgs.last().id
         }
     }
@@ -549,17 +570,29 @@ class FloatingChatService : Service() {
     /**
      * When minimized, shows a popup bubble with the latest incoming message.
      * The popup auto-hides after 4 seconds.
+     *
+     * IMPORTANT: this must run BEFORE updateMessagesText updates lastSeenMessageId
+     * for the minimized case (handled above — lastSeenMessageId is only advanced
+     * when expanded).
      */
     private fun checkForNewIncomingMessage(msgs: List<ChatMessage>) {
         if (!isMinimized) return
         if (msgs.isEmpty()) return
-        val last = msgs.last()
-        if (last.isOutgoing) return
-        if (last.id <= lastSeenMessageId) return
+        // Find the latest INCOMING message (skip outgoing ones we sent)
+        var newestIncoming: ChatMessage? = null
+        for (m in msgs) {
+            if (!m.isOutgoing) {
+                if (newestIncoming == null || m.id > newestIncoming.id) {
+                    newestIncoming = m
+                }
+            }
+        }
+        if (newestIncoming == null) return
+        if (newestIncoming.id <= lastSeenMessageId) return
         // New incoming message!
-        lastSeenMessageId = last.id
-        lastIncomingMessage = last
-        showMessageBubble(last)
+        lastSeenMessageId = newestIncoming.id
+        lastIncomingMessage = newestIncoming
+        showMessageBubble(newestIncoming)
     }
 
     private fun showMessageBubble(msg: ChatMessage) {
