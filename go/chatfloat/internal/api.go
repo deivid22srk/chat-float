@@ -13,6 +13,7 @@ import (
         "os"
         "path/filepath"
         "sync"
+        "time"
 )
 
 // Session holds the in-memory state of the current user session.
@@ -339,6 +340,64 @@ func enrichMessages(msgs []ChatMessage) {
                                 }
                         }
                 }
+        }
+}
+
+// SendMediaMessageAPI uploads media bytes to Supabase Storage and inserts
+// a message with the media URL. mediaType is "image" or "audio".
+// contentType is the MIME type ("image/jpeg", "audio/aac", etc.).
+func SendMediaMessageAPI(mediaBytes []byte, mediaType, contentType, caption string) error {
+        globalSession.mu.Lock()
+        defer globalSession.mu.Unlock()
+
+        if globalSession.account == nil {
+                return ErrNotLoggedIn
+        }
+        if globalSession.supabase == nil {
+                return errors.New("not configured")
+        }
+        if len(mediaBytes) == 0 {
+                return errors.New("media data is required")
+        }
+
+        token := globalSession.account.Token
+        // Generate a unique filename
+        filename := fmt.Sprintf("%s_%d.%s", token, time.Now().UnixMilli(), extensionForType(mediaType))
+
+        // Upload to media bucket
+        mediaURL, err := globalSession.supabase.UploadMedia(filename, contentType, mediaBytes)
+        if err != nil {
+                return fmt.Errorf("upload media: %w", err)
+        }
+
+        // Insert message with media URL
+        text := caption
+        if text == "" {
+                text = "📸" // default caption
+        }
+        msg, err := globalSession.supabase.InsertMediaMessage(text, token, globalSession.account.Username, mediaURL, mediaType)
+        if err != nil {
+                return err
+        }
+        msg.IsOutgoing = true
+
+        // Add to local cache
+        globalSession.cachedMessages = append(globalSession.cachedMessages, *msg)
+        if msg.ID > globalSession.lastMessageID {
+                globalSession.lastMessageID = msg.ID
+        }
+        globalSession.messagesLoaded = true
+        return nil
+}
+
+func extensionForType(mediaType string) string {
+        switch mediaType {
+        case "image":
+                return "jpg"
+        case "audio":
+                return "aac"
+        default:
+                return "bin"
         }
 }
 

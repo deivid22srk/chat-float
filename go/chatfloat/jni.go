@@ -22,6 +22,7 @@ extern char* UpdateUsername(char* newUsername);
 extern char* UpdateAvatar(char* avatarBase64);
 extern char* UpdateAvatarBytes(char* data, int length);
 extern char* SendMessage(char* text);
+extern char* SendMediaMessage(char* data, int length, char* mediaType, char* contentType, char* caption);
 extern char* GetMessages(void);
 extern char* Logout(void);
 extern void  FreeString(char* s);
@@ -144,6 +145,29 @@ Java_com_deivid22srk_chatfloat_data_GoBridge_SendMessage(
     char* a0 = jstr_to_cstr(env, p0);
     char* r = SendMessage(a0);
     free_cstr(a0);
+    return cstr_to_jstr(env, r);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_deivid22srk_chatfloat_data_GoBridge_SendMediaMessage(
+    JNIEnv* env, jobject thiz, jbyteArray bytes, jstring p_mediaType, jstring p_contentType, jstring p_caption
+) {
+    if (bytes == NULL || (*env)->GetArrayLength(env, bytes) == 0) {
+        char* r = SendMediaMessage(NULL, 0, NULL, NULL, NULL);
+        return cstr_to_jstr(env, r);
+    }
+    jsize len = (*env)->GetArrayLength(env, bytes);
+    jbyte* data = (*env)->GetByteArrayElements(env, bytes, NULL);
+    if (data == NULL) {
+        char* r = SendMediaMessage(NULL, 0, NULL, NULL, NULL);
+        return cstr_to_jstr(env, r);
+    }
+    char* a_mt = jstr_to_cstr(env, p_mediaType);
+    char* a_ct = jstr_to_cstr(env, p_contentType);
+    char* a_cap = jstr_to_cstr(env, p_caption);
+    char* r = SendMediaMessage((char*)data, (int)len, a_mt, a_ct, a_cap);
+    (*env)->ReleaseByteArrayElements(env, bytes, data, JNI_ABORT);
+    free_cstr(a_mt); free_cstr(a_ct); free_cstr(a_cap);
     return cstr_to_jstr(env, r);
 }
 

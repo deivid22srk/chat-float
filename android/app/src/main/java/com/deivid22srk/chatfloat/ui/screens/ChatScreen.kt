@@ -1,9 +1,13 @@
 package com.deivid22srk.chatfloat.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -78,6 +83,20 @@ fun ChatScreen(
 
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val audioRecorder = remember { com.deivid22srk.chatfloat.audio.AudioRecorder(context) }
+    var isRecording by remember { mutableStateOf(false) }
+
+    // Mic permission launcher
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && isRecording) {
+            // Permission just granted, start recording
+            audioRecorder.start()
+        } else {
+            isRecording = false
+        }
+    }
 
     // Smart auto-scroll: only scroll to bottom if user is already near the bottom
     // (not reading history)
@@ -199,34 +218,89 @@ fun ChatScreen(
                     )
                 )
                 Spacer(Modifier.width(8.dp))
-                IconButton(
-                    onClick = { sendMessage() },
-                    enabled = input.isNotBlank() && !sending,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (input.isNotBlank() && !sending)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
-                        )
-                ) {
-                    if (sending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    } else {
+                if (input.isNotBlank() || sending) {
+                    // Send button
+                    IconButton(
+                        onClick = { sendMessage() },
+                        enabled = input.isNotBlank() && !sending,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (input.isNotBlank() && !sending)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant
+                            )
+                    ) {
+                        if (sending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Enviar",
+                                tint = if (input.isNotBlank())
+                                    MaterialTheme.colorScheme.onPrimary
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    // Mic button (press and hold to record)
+                    IconButton(
+                        onClick = {
+                            val hasPermission = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                                PackageManager.PERMISSION_GRANTED
+                            if (hasPermission) {
+                                isRecording = true
+                                audioRecorder.start()
+                            } else {
+                                isRecording = true
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isRecording) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                    ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Enviar",
-                            tint = if (input.isNotBlank())
-                                MaterialTheme.colorScheme.onPrimary
-                            else
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                            Icons.Filled.Mic,
+                            contentDescription = if (isRecording) "Gravando… toque para parar" else "Gravar áudio",
+                            tint = if (isRecording) MaterialTheme.colorScheme.onError
+                                   else MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    // When recording, a second tap stops and sends
+                    if (isRecording) {
+                        LaunchedEffect(isRecording) {}
+                        IconButton(
+                            onClick = {
+                                isRecording = false
+                                val bytes = audioRecorder.stop()
+                                if (bytes != null) {
+                                    viewModel.sendAudio(bytes)
+                                }
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Enviar áudio",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
                     }
                 }
             }

@@ -73,6 +73,14 @@ object GoBridge {
     /** SendMessage(text) -> json */
     private external fun SendMessage(text: String): String
 
+    /** SendMediaMessage(bytes, mediaType, contentType, caption) -> json */
+    private external fun SendMediaMessage(
+        data: ByteArray,
+        mediaType: String,
+        contentType: String,
+        caption: String
+    ): String
+
     /** GetMessages() -> json */
     private external fun GetMessages(): String
 
@@ -175,7 +183,23 @@ object GoBridge {
         withContext(Dispatchers.IO) {
             runCatching {
                 val resp = call { SendMessage(text) }
-                if (!resp.ok) throw RuntimeException(resp.error)
+                if (!resp.ok) throw RuntimeException(resp.error ?: "unknown error")
+            }
+        }
+
+    /** Uploads media (image/audio) to Supabase Storage and sends a message. */
+    suspend fun sendMediaMessage(
+        data: ByteArray,
+        mediaType: String,    // "image" or "audio"
+        contentType: String,  // "image/jpeg", "audio/aac", etc.
+        caption: String       // optional text caption
+    ): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                Log.d(TAG, "sendMediaMessage: ${data.size} bytes, type=$mediaType")
+                val resp = call { SendMediaMessage(data, mediaType, contentType, caption) }
+                Log.d(TAG, "sendMediaMessage response: ok=${resp.ok} error=${resp.error}")
+                if (!resp.ok) throw RuntimeException(resp.error ?: "unknown error")
             }
         }
 

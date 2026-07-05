@@ -111,6 +111,19 @@ func SendMessage(text *C.char) *C.char {
         return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
+//export SendMediaMessage
+func SendMediaMessage(data *C.char, length C.int, mediaType *C.char, contentType *C.char, caption *C.char) *C.char {
+        if data == nil || length <= 0 {
+                return jsonResp(APIResponse{OK: false, Error: "no media data"})
+        }
+        mediaBytes := C.GoBytes(unsafe.Pointer(data), length)
+        mt := C.GoString(mediaType)
+        ct := C.GoString(contentType)
+        cap := C.GoString(caption)
+        err := chatfloat.SendMediaMessageAPI(mediaBytes, mt, ct, cap)
+        return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
+}
+
 //export GetMessages
 func GetMessages() *C.char {
         msgs, err := chatfloat.GetMessagesAPI()

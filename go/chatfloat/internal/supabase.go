@@ -177,6 +177,8 @@ type dbMessage struct {
         SenderToken *string    `json:"sender_token,omitempty"`
         SenderName  string     `json:"sender_name"`
         CreatedAt   *time.Time `json:"created_at,omitempty"`
+        MediaURL    *string    `json:"media_url,omitempty"`
+        MediaType   *string    `json:"media_type,omitempty"`
 }
 
 // InsertMessage creates a new message row and returns the inserted row.
@@ -228,10 +230,64 @@ func (c *SupabaseClient) InsertMessage(text, senderToken, senderName string) (*C
         return msg, nil
 }
 
+// InsertMediaMessage creates a new message with media (image/audio) and
+// returns the inserted row.
+func (c *SupabaseClient) InsertMediaMessage(text, senderToken, senderName, mediaURL, mediaType string) (*ChatMessage, error) {
+        body := dbMessage{
+                Text:        text,
+                SenderToken: &senderToken,
+                SenderName:  senderName,
+                MediaURL:    &mediaURL,
+                MediaType:   &mediaType,
+        }
+        bodyBytes, err := json.Marshal(body)
+        if err != nil {
+                return nil, err
+        }
+        u := c.restURL("messages")
+        req, err := http.NewRequest("POST", u, bytes.NewReader(bodyBytes))
+        if err != nil {
+                return nil, err
+        }
+        c.setHeaders(req)
+        req.Header.Set("Prefer", "return=representation")
+        resp, err := c.httpCli.Do(req)
+        if err != nil {
+                return nil, err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode >= 300 {
+                b, _ := io.ReadAll(resp.Body)
+                return nil, fmt.Errorf("supabase insert media message: %d %s", resp.StatusCode, string(b))
+        }
+        var rows []dbMessage
+        if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+                return nil, err
+        }
+        if len(rows) == 0 {
+                return nil, fmt.Errorf("supabase: no row returned")
+        }
+        r := rows[0]
+        msg := &ChatMessage{
+                Text:        r.Text,
+                SenderName:  r.SenderName,
+                SenderToken: senderToken,
+                MediaURL:    mediaURL,
+                MediaType:   mediaType,
+        }
+        if r.ID != nil {
+                msg.ID = *r.ID
+        }
+        if r.CreatedAt != nil {
+                msg.Timestamp = r.CreatedAt.UnixMilli()
+        }
+        return msg, nil
+}
+
 // GetMessages fetches all messages ordered by created_at ascending.
 // Enriches each message with the sender's avatar URL from the accounts table.
 func (c *SupabaseClient) GetMessages(sinceID int64) ([]ChatMessage, error) {
-        params := []string{"order=created_at.asc", "select=id,text,sender_token,sender_name,created_at"}
+        params := []string{"order=created_at.asc", "select=id,text,sender_token,sender_name,created_at,media_url,media_type"}
         if sinceID > 0 {
                 params = append(params, fmt.Sprintf("id=gt.%d", sinceID))
         }
@@ -288,9 +344,42 @@ func (c *SupabaseClient) GetMessages(sinceID int64) ([]ChatMessage, error) {
                                 m.SenderName = uname
                         }
                 }
+                if r.MediaURL != nil {
+                        m.MediaURL = *r.MediaURL
+                }
+                if r.MediaType != nil {
+                        m.MediaType = *r.MediaType
+                }
                 msgs = append(msgs, m)
         }
         return msgs, nil
+}
+
+// ============================================================
+// Storage (media bucket — images + audio)
+// ============================================================
+
+// UploadMedia uploads raw bytes to the 'media' bucket and returns the
+// public URL. contentType should be "image/jpeg", "audio/aac", etc.
+func (c *SupabaseClient) UploadMedia(filename, contentType string, data []byte) (string, error) {
+        u := c.baseURL + "/storage/v1/object/media/" + filename
+        req, err := http.NewRequest("POST", u, bytes.NewReader(data))
+        if err != nil {
+                return "", err
+        }
+        c.setHeaders(req)
+        req.Header.Set("Content-Type", contentType)
+        req.Header.Set("x-upsert", "true")
+        resp, err := c.httpCli.Do(req)
+        if err != nil {
+                return "", err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode >= 300 {
+                b, _ := io.ReadAll(resp.Body)
+                return "", fmt.Errorf("supabase upload media: %d %s", resp.StatusCode, string(b))
+        }
+        return c.baseURL + "/storage/v1/object/public/media/" + filename, nil
 }
 
 // ============================================================

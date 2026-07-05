@@ -645,14 +645,22 @@ class FloatingChatService : Service() {
 
     private fun handleScreenshot() {
         if (com.deivid22srk.chatfloat.service.ScreenshotAccessibilityService.isEnabled()) {
-            // Accessibility service is running — take the screenshot
+            // Set callbacks to hide/show the overlay during capture
+            com.deivid22srk.chatfloat.service.ScreenshotAccessibilityService.onScreenshotStart = {
+                // Hide the overlay so it doesn't appear in the screenshot
+                rootView?.visibility = View.INVISIBLE
+            }
+            com.deivid22srk.chatfloat.service.ScreenshotAccessibilityService.onScreenshotDone = {
+                // Show the overlay again
+                rootView?.visibility = View.VISIBLE
+            }
             Toast.makeText(this, "Capturando tela…", Toast.LENGTH_SHORT).show()
             val ok = com.deivid22srk.chatfloat.service.ScreenshotAccessibilityService.requestScreenshot()
             if (!ok) {
+                rootView?.visibility = View.VISIBLE
                 Toast.makeText(this, "Falha ao capturar. Tente novamente.", Toast.LENGTH_SHORT).show()
             }
         } else {
-            // Need to enable the accessibility service first
             Toast.makeText(
                 this,
                 "Ative o ChatFloat em Acessibilidade para usar o Print",

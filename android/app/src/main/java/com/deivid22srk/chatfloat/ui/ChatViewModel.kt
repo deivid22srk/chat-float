@@ -57,6 +57,24 @@ class ChatViewModel : ViewModel() {
         }
     }
 
+    fun sendAudio(audioBytes: ByteArray) {
+        viewModelScope.launch {
+            _sending.value = true
+            GoBridge.sendMediaMessage(audioBytes, "audio", "audio/aac", "🎤 Áudio")
+                .onFailure { _error.value = it.message }
+            _sending.value = false
+        }
+    }
+
+    fun sendImage(imageBytes: ByteArray, caption: String = "📸 Foto") {
+        viewModelScope.launch {
+            _sending.value = true
+            GoBridge.sendMediaMessage(imageBytes, "image", "image/jpeg", caption)
+                .onFailure { _error.value = it.message }
+            _sending.value = false
+        }
+    }
+
     fun clearError() { _error.value = null }
 
     override fun onCleared() {
