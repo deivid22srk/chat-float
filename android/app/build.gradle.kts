@@ -14,8 +14,8 @@ android {
         applicationId = "com.deivid22srk.chatfloat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "5.3.1"
+        versionCode = 11
+        versionName = "5.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -101,5 +101,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    // Coil for image loading (avatars from URL) — used both in Compose and
+    // in the floating overlay (via ImageView).
+    implementation("io.coil-kt:coil:2.7.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     debugImplementation(libs.androidx.ui.tooling)
 }

@@ -3,6 +3,8 @@ package com.deivid22srk.chatfloat.service
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
@@ -11,7 +13,9 @@ import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
@@ -26,11 +30,16 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import coil.ImageLoader
+import coil.request.ImageRequest
 import com.deivid22srk.chatfloat.ChatFloatApplication
 import com.deivid22srk.chatfloat.MainActivity
 import com.deivid22srk.chatfloat.R
@@ -42,34 +51,44 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Foreground service that shows a floating chat overlay above other apps.
  *
  * Three modes:
- *   1. EXPANDED — full chat window (header + messages + input)
+ *   1. EXPANDED — full chat window with bubble-style messages + action panel
  *   2. MINIMIZED — small semi-transparent icon (drag to move, tap to expand)
- *   3. MINIMIZED + NEW MESSAGE — icon + a small popup bubble showing the
- *      last incoming message text, which auto-hides after a few seconds
+ *   3. MINIMIZED + NEW MESSAGE — icon + popup bubble with latest incoming msg
  *
- * Keyboard fix: when the EditText gains focus, we toggle FLAG_NOT_FOCUSABLE
- * off so the soft keyboard can appear. When focus is lost, we set it back.
+ * The overlay uses native Android Views (not Compose) for performance, but
+ * mirrors the same visual style as the Compose app:
+ *   - Indigo primary (#6366F1)
+ *   - Bubble outgoing: indigo bg + white text
+ *   - Bubble incoming: neutral-100 bg + dark text
+ *   - Rounded corners, avatars loaded via Coil from Supabase Storage URLs
+ *
+ * Action panel buttons (when expanded):
+ *   - Screenshot (📸): captures screen and sends "📸 Screenshot" message
+ *   - Copy last (📋): copies last incoming message to clipboard
+ *   - Clear (🗑): clears the local message display (not the server)
+ *   - Minimize (─): collapses to icon
+ *   - Close (✕): stops the service
  */
 class FloatingChatService : Service() {
 
     private lateinit var windowManager: WindowManager
+    private lateinit var imageLoader: ImageLoader
     private var rootView: View? = null
     private var expandedView: View? = null
     private var minimizedView: View? = null
-    private var messagesTextView: TextView? = null
+    private var messagesContainer: LinearLayout? = null
     private var messagesScrollView: ScrollView? = null
     private var inputEditText: EditText? = null
     private var expandedParams: WindowManager.LayoutParams? = null
     private var minimizedParams: WindowManager.LayoutParams? = null
 
-    // Bubble popup is a SEPARATE window so it can be positioned independently
-    // of the minimized icon (FrameLayout margins inside a WindowManager view
-    // don't translate to screen coordinates correctly).
+    // Bubble popup (separate window)
     private var bubbleView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var bubbleSenderText: TextView? = null
@@ -79,15 +98,30 @@ class FloatingChatService : Service() {
     private var lastSeenMessageId: Long = 0L
     private var lastIncomingMessage: ChatMessage? = null
     private var bubbleHideJob: Job? = null
+    private var cachedMessages: List<ChatMessage> = emptyList()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var pollingJob: Job? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Colors — mirror the Compose theme
+    private val colorPrimary = Color.parseColor("#6366F1")
+    private val colorPrimaryDark = Color.parseColor("#4F46E5")
+    private val colorSurface = Color.parseColor("#FAFAFC")
+    private val colorSurfaceElevated = Color.parseColor("#FFFFFF")
+    private val colorSurfaceVariant = Color.parseColor("#F1F1F5")
+    private val colorOutline = Color.parseColor("#E4E4E7")
+    private val colorTextPrimary = Color.parseColor("#18181B")
+    private val colorTextSecondary = Color.parseColor("#71717A")
+    private val colorBubbleOutgoing = Color.parseColor("#6366F1")
+    private val colorBubbleIncoming = Color.parseColor("#F4F4F5")
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        imageLoader = ImageLoader.Builder(this).build()
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
@@ -100,25 +134,21 @@ class FloatingChatService : Service() {
     }
 
     // ============================================================
-    // Expanded overlay (full chat window)
+    // Expanded overlay (full chat window with bubbles + action panel)
     // ============================================================
 
     private fun showOverlay() {
         val density = Resources.getSystem().displayMetrics.density
         val dp = { v: Int -> (v * density).toInt() }
 
-        // Root container that holds both expanded and minimized views.
-        // The bubble popup is a SEPARATE window (added in showBubble()).
         val root = FrameLayout(this)
 
-        // --- Expanded view ---
         val expanded = buildExpandedView(dp)
         root.addView(expanded, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        // --- Minimized view (hidden initially) ---
         val minimized = buildMinimizedView(dp)
         minimized.visibility = View.GONE
         root.addView(minimized, FrameLayout.LayoutParams(
@@ -143,7 +173,7 @@ class FloatingChatService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = 40
             y = 200
-            width = dp(300)
+            width = dp(320)
         }
 
         windowManager.addView(root, params)
@@ -159,36 +189,35 @@ class FloatingChatService : Service() {
         val expanded = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                cornerRadius = dp(20).toFloat()
-                setColor(Color.parseColor("#FDFDFF"))
-                setStroke(dp(1), Color.parseColor("#E8E8F0"))
+                cornerRadius = dp(24).toFloat()
+                setColor(colorSurfaceElevated)
+                setStroke(dp(1), colorOutline)
             }
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            elevation = dp(8).toFloat()
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            elevation = dp(12).toFloat()
         }
 
         // === Header (draggable) ===
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(2), dp(4), dp(2))
+            setPadding(dp(14), dp(10), dp(8), dp(10))
             background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(Color.parseColor("#5B5BF0"))
+                cornerRadius = dp(18).toFloat()
+                setColor(colorPrimary)
             }
         }
-        val titleIcon = TextView(ctx).apply {
+        val titleEmoji = TextView(ctx).apply {
             text = "💬"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            setPadding(dp(12), dp(8), dp(8), dp(8))
         }
         val title = TextView(ctx).apply {
             text = "ChatFloat"
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             setTypeface(null, Typeface.BOLD)
             val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            lp.marginEnd = dp(4)
+            lp.marginStart = dp(10)
             layoutParams = lp
         }
         val btnMinimize = ImageButton(ctx).apply {
@@ -203,42 +232,70 @@ class FloatingChatService : Service() {
             setPadding(dp(10), dp(10), dp(10), dp(10))
             imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
         }
-        header.addView(titleIcon)
+        header.addView(titleEmoji)
         header.addView(title)
         header.addView(btnMinimize)
         header.addView(btnClose)
 
-        // === Messages area ===
-        val messagesText = TextView(ctx).apply {
-            setTextColor(Color.parseColor("#1F1F2E"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            text = "Aguardando mensagens…"
-            setLineSpacing(dp(2).toFloat(), 1f)
+        // === Action panel (horizontal scroll of quick action buttons) ===
+        val actionPanel = HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(10)
+            layoutParams = lp
+        }
+        val actionRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START
+        }
+
+        val btnScreenshot = makeActionButton(dp, "📸", "Screenshot")
+        val btnCopy = makeActionButton(dp, "📋", "Copiar")
+        val btnClear = makeActionButton(dp, "🗑", "Limpar")
+        val btnScroll = makeActionButton(dp, "⬇", "Rolar")
+        actionRow.addView(btnScreenshot)
+        actionRow.addView(btnCopy)
+        actionRow.addView(btnClear)
+        actionRow.addView(btnScroll)
+        actionPanel.addView(actionRow)
+
+        // === Messages area (bubble-style) ===
+        val messagesContainer = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
         val scrollView = ScrollView(ctx).apply {
-            addView(messagesText)
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(200))
-            lp.topMargin = dp(8)
-            lp.bottomMargin = dp(8)
+            addView(messagesContainer)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(240))
+            lp.topMargin = dp(10)
+            lp.bottomMargin = dp(10)
             layoutParams = lp
             background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Color.parseColor("#F4F4F8"))
+                cornerRadius = dp(16).toFloat()
+                setColor(colorSurfaceVariant)
             }
         }
+        val emptyHint = TextView(ctx).apply {
+            text = "Aguardando mensagens…"
+            setTextColor(colorTextSecondary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(60), 0, 0)
+            tag = "empty_hint"
+        }
+        messagesContainer.addView(emptyHint)
 
         // === Input row ===
         val input = EditText(ctx).apply {
             hint = "Digite uma mensagem…"
-            setHintTextColor(Color.parseColor("#A0A0B0"))
+            setHintTextColor(Color.parseColor("#A1A1AA"))
             background = GradientDrawable().apply {
                 cornerRadius = dp(24).toFloat()
-                setColor(Color.WHITE)
-                setStroke(dp(1), Color.parseColor("#E0E0EA"))
+                setColor(colorSurfaceElevated)
+                setStroke(dp(1), colorOutline)
             }
-            setTextColor(Color.parseColor("#1F1F2E"))
-            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setTextColor(colorTextPrimary)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             maxLines = 3
             isFocusable = true
@@ -252,10 +309,10 @@ class FloatingChatService : Service() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             background = GradientDrawable().apply {
                 cornerRadius = dp(24).toFloat()
-                setColor(Color.parseColor("#5B5BF0"))
+                setColor(colorPrimary)
             }
             setTextColor(Color.WHITE)
-            setPadding(dp(20), dp(10), dp(20), dp(10))
+            setPadding(dp(20), dp(12), dp(20), dp(12))
             minEms = 1
         }
         val inputRow = LinearLayout(ctx).apply {
@@ -266,6 +323,7 @@ class FloatingChatService : Service() {
         }
 
         expanded.addView(header)
+        expanded.addView(actionPanel)
         expanded.addView(scrollView)
         expanded.addView(inputRow)
 
@@ -293,13 +351,10 @@ class FloatingChatService : Service() {
             }
         }
 
-        // === Minimize ===
+        // === Button handlers ===
         btnMinimize.setOnClickListener { minimize() }
-
-        // === Close ===
         btnClose.setOnClickListener { stopSelf() }
 
-        // === Send ===
         btnSend.setOnClickListener {
             val text = input.text?.toString().orEmpty()
             if (text.isBlank()) return@setOnClickListener
@@ -307,12 +362,18 @@ class FloatingChatService : Service() {
             input.clearFocus()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(input.windowToken, 0)
-            // Restore FLAG_NOT_FOCUSABLE so the overlay doesn't steal touches
             setFocusable(false)
             scope.launch { GoBridge.sendMessage(text.trim()) }
         }
 
-        // === Keyboard fix: toggle FLAG_NOT_FOCUSABLE on focus change ===
+        btnScreenshot.setOnClickListener { handleScreenshot() }
+        btnCopy.setOnClickListener { handleCopyLastMessage() }
+        btnClear.setOnClickListener { handleClearDisplay() }
+        btnScroll.setOnClickListener {
+            messagesScrollView?.post { messagesScrollView?.fullScroll(ScrollView.FOCUS_DOWN) }
+        }
+
+        // === Keyboard fix ===
         input.setOnFocusChangeListener { _, hasFocus ->
             setFocusable(hasFocus)
             if (hasFocus) {
@@ -320,22 +381,51 @@ class FloatingChatService : Service() {
                 imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
             }
         }
-        // Also show keyboard when tapped (some ROMs need explicit request)
         input.setOnClickListener {
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
         }
 
-        messagesTextView = messagesText
-        messagesScrollView = scrollView
-        inputEditText = input
+        messagesContainer?.let { this.messagesContainer = it }
+        this.messagesScrollView = scrollView
+        this.inputEditText = input
         return expanded
     }
 
-    /**
-     * Toggles FLAG_NOT_FOCUSABLE on the overlay window so the EditText can
-     * receive focus and the soft keyboard can appear.
-     */
+    private fun makeActionButton(dp: (Int) -> Int, emoji: String, label: String): View {
+        val ctx = this
+        val btn = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(colorSurfaceVariant)
+                setStroke(dp(1), colorOutline)
+            }
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.marginEnd = dp(8)
+            layoutParams = lp
+            isClickable = true
+        }
+        val emojiTv = TextView(ctx).apply {
+            text = emoji
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        }
+        val labelTv = TextView(ctx).apply {
+            text = label
+            setTextColor(colorTextPrimary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTypeface(null, Typeface.NORMAL)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.marginStart = dp(6)
+            layoutParams = lp
+        }
+        btn.addView(emojiTv)
+        btn.addView(labelTv)
+        return btn
+    }
+
     private fun setFocusable(focusable: Boolean) {
         val params = expandedParams ?: return
         val root = rootView ?: return
@@ -348,7 +438,221 @@ class FloatingChatService : Service() {
     }
 
     // ============================================================
-    // Minimized view (small semi-transparent icon)
+    // Message rendering (bubble-style, mirrors Compose MessageBubble)
+    // ============================================================
+
+    private fun updateMessagesDisplay(msgs: List<ChatMessage>) {
+        val container = messagesContainer ?: return
+        val scrollView = messagesScrollView ?: return
+        cachedMessages = msgs
+
+        // Remove all views except the empty hint
+        container.removeAllViews()
+        if (msgs.isEmpty()) {
+            val emptyHint = TextView(this).apply {
+                text = "Aguardando mensagens…"
+                setTextColor(colorTextSecondary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(60), 0, 0)
+            }
+            container.addView(emptyHint)
+            return
+        }
+
+        val density = Resources.getSystem().displayMetrics.density
+        val dp = { v: Int -> (v * density).toInt() }
+
+        msgs.takeLast(30).forEach { msg ->
+            val isOutgoing = msg.isOutgoing
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = if (isOutgoing) Gravity.END else Gravity.START
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                lp.topMargin = dp(2)
+                lp.bottomMargin = dp(2)
+                layoutParams = lp
+            }
+
+            // Avatar (only for incoming)
+            if (!isOutgoing) {
+                val avatar = ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(Color.parseColor("#E0E7FF"))
+                    }
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setOval(0, 0, view.width, view.height)
+                        }
+                    }
+                }
+                // Load avatar from URL via Coil, or leave empty for initials overlay
+                val url = msg.senderAvatar
+                if (url != null && url.isNotEmpty()) {
+                    val request = ImageRequest.Builder(this)
+                        .data(url)
+                        .target(avatar)
+                        .build()
+                    imageLoader.enqueue(request)
+                }
+                // Frame containing avatar + initials overlay
+                val avatarFrame = FrameLayout(this).apply {
+                    val lp = LinearLayout.LayoutParams(dp(28), dp(28))
+                    lp.marginEnd = dp(6)
+                    lp.gravity = Gravity.TOP or Gravity.START
+                    layoutParams = lp
+                }
+                avatar.layoutParams = FrameLayout.LayoutParams(dp(28), dp(28))
+                val initials = TextView(this).apply {
+                    text = msg.senderName.take(2).uppercase()
+                    setTextColor(colorPrimary)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                    setTypeface(null, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    layoutParams = FrameLayout.LayoutParams(dp(28), dp(28))
+                }
+                avatarFrame.addView(avatar)
+                avatarFrame.addView(initials)
+                row.addView(avatarFrame)
+            }
+
+            // Bubble column (sender name + bubble body)
+            val col = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = if (isOutgoing) Gravity.END else Gravity.START
+                val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = lp
+            }
+
+            if (!isOutgoing) {
+                val sender = TextView(this).apply {
+                    text = msg.senderName
+                    setTextColor(colorPrimary)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTypeface(null, Typeface.BOLD)
+                    val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    lp.marginStart = dp(10)
+                    lp.bottomMargin = dp(2)
+                    layoutParams = lp
+                }
+                col.addView(sender)
+            }
+
+            val bubble = TextView(this).apply {
+                text = msg.text
+                setTextColor(if (isOutgoing) Color.WHITE else colorTextPrimary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    cornerRadii = floatArrayOf(
+                        dp(18).toFloat(), dp(18).toFloat(),  // top-left, top-left
+                        dp(18).toFloat(), dp(18).toFloat(),  // top-right, top-right
+                        if (isOutgoing) dp(4).toFloat() else dp(18).toFloat(),  // bottom-right
+                        if (isOutgoing) dp(4).toFloat() else dp(18).toFloat(),
+                        if (isOutgoing) dp(18).toFloat() else dp(4).toFloat(),  // bottom-left
+                        if (isOutgoing) dp(18).toFloat() else dp(4).toFloat()
+                    )
+                    setColor(if (isOutgoing) colorBubbleOutgoing else colorBubbleIncoming)
+                }
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                lp.bottomMargin = dp(2)
+                // Constrain max width
+                maxWidth = dp(220)
+                layoutParams = lp
+            }
+            col.addView(bubble)
+
+            // Timestamp
+            val time = TextView(this).apply {
+                text = formatTime(msg.timestamp)
+                setTextColor(colorTextSecondary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                lp.gravity = if (isOutgoing) Gravity.END else Gravity.START
+                if (isOutgoing) lp.marginEnd = dp(4) else lp.marginStart = dp(10)
+                layoutParams = lp
+            }
+            col.addView(time)
+
+            row.addView(col)
+            container.addView(row)
+        }
+
+        scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
+
+        if (msgs.isNotEmpty()) {
+            lastSeenMessageId = if (!isMinimized) msgs.last().id else lastSeenMessageId
+        }
+    }
+
+    private fun formatTime(timestampMs: Long): String {
+        if (timestampMs <= 0) return ""
+        val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(timestampMs))
+    }
+
+    private fun dp(v: Int): Int {
+        val density = Resources.getSystem().displayMetrics.density
+        return (v * density).toInt()
+    }
+
+    // ============================================================
+    // Action panel handlers
+    // ============================================================
+
+    private fun handleScreenshot() {
+        Toast.makeText(this, "Solicitando permissão para captura de tela…", Toast.LENGTH_SHORT).show()
+        // Launch MainActivity to request MediaProjection permission
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra("REQUEST_SCREEN_CAPTURE", true)
+        }
+        startActivity(intent)
+        // After permission is granted, the ScreenshotManager captures and
+        // sends a message. We can't capture directly from the service without
+        // permission, so we just send a placeholder message for now.
+        // The actual screenshot capture happens in ScreenshotManager after
+        // the user grants permission.
+        scope.launch {
+            // Send a marker message — the screenshot bytes will be uploaded
+            // to Supabase Storage and the message will include the URL once
+            // the screenshot is captured.
+            GoBridge.sendMessage("📸 Screenshot")
+        }
+    }
+
+    private fun handleCopyLastMessage() {
+        val last = cachedMessages.lastOrNull { !it.isOutgoing } ?: run {
+            Toast.makeText(this, "Nenhuma mensagem para copiar", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("ChatFloat", last.text))
+        Toast.makeText(this, "Mensagem copiada!", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun handleClearDisplay() {
+        // Just clear the visual display; messages stay on the server
+        messagesContainer?.let { container ->
+            container.removeAllViews()
+            val emptyHint = TextView(this).apply {
+                text = "Display limpo (mensagens continuam no servidor)"
+                setTextColor(colorTextSecondary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(60), 0, 0)
+            }
+            container.addView(emptyHint)
+        }
+        Toast.makeText(this, "Display limpo", Toast.LENGTH_SHORT).show()
+    }
+
+    // ============================================================
+    // Minimized view
     // ============================================================
 
     private fun buildMinimizedView(dp: (Int) -> Int): View {
@@ -359,16 +663,14 @@ class FloatingChatService : Service() {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#CC5B5BF0")) // ~80% opacity
+                setColor(Color.parseColor("#CC6366F1"))
             }
             setPadding(dp(14), dp(14), dp(14), dp(14))
-            elevation = dp(6).toFloat()
+            elevation = dp(8).toFloat()
         }
-        // Layout params for the minimized icon (small, top-left)
         val iconParams = FrameLayout.LayoutParams(dp(56), dp(56), Gravity.TOP or Gravity.START)
         icon.layoutParams = iconParams
 
-        // Drag + click handling
         icon.setOnTouchListener(object : View.OnTouchListener {
             private var initialX = 0
             private var initialY = 0
@@ -396,10 +698,7 @@ class FloatingChatService : Service() {
                         }
                     }
                     MotionEvent.ACTION_UP -> {
-                        if (!moved) {
-                            // Tap → expand
-                            expand()
-                        }
+                        if (!moved) expand()
                     }
                 }
                 return true
@@ -422,20 +721,19 @@ class FloatingChatService : Service() {
         }
         val sender = TextView(ctx).apply {
             text = ""
-            setTextColor(Color.parseColor("#5B5BF0"))
+            setTextColor(colorPrimary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTypeface(null, Typeface.BOLD)
         }
         val body = TextView(ctx).apply {
             text = ""
-            setTextColor(Color.parseColor("#1F1F2E"))
+            setTextColor(colorTextPrimary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             maxLines = 3
             setPadding(0, dp(2), 0, 0)
         }
         bubble.addView(sender)
         bubble.addView(body)
-        // Store refs for later updates
         bubbleSenderText = sender
         bubbleBodyText = body
         return bubble
@@ -446,24 +744,18 @@ class FloatingChatService : Service() {
         isMinimized = true
         expandedView?.visibility = View.GONE
         minimizedView?.visibility = View.VISIBLE
-        // Hide keyboard if visible
         inputEditText?.let { input ->
             input.clearFocus()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(input.windowToken, 0)
         }
         setFocusable(false)
-        // Switch to a smaller window size for the icon
-        val density = Resources.getSystem().displayMetrics.density
-        val dp = { v: Int -> (v * density).toInt() }
         expandedParams?.let { p ->
             p.width = WindowManager.LayoutParams.WRAP_CONTENT
             p.height = WindowManager.LayoutParams.WRAP_CONTENT
             rootView?.let { windowManager.updateViewLayout(it, p) }
         }
         minimizedParams = expandedParams
-        // Mark current last message as seen so popup only triggers for
-        // messages arriving AFTER the user minimized.
         scope.launch {
             runCatching {
                 val msgs = GoBridge.getMessages()
@@ -482,15 +774,12 @@ class FloatingChatService : Service() {
         val density = Resources.getSystem().displayMetrics.density
         val dp = { v: Int -> (v * density).toInt() }
         expandedParams?.let { p ->
-            p.width = dp(300)
+            p.width = dp(320)
             p.height = WindowManager.LayoutParams.WRAP_CONTENT
             rootView?.let { windowManager.updateViewLayout(it, p) }
         }
-        // Hide the bubble popup if visible
         bubbleHideJob?.cancel()
         hideMessageBubble()
-        // Mark the current last message as seen so we don't re-popup old
-        // messages next time we minimize. Fetch the latest from Go.
         scope.launch {
             runCatching {
                 val msgs = GoBridge.getMessages()
@@ -511,69 +800,19 @@ class FloatingChatService : Service() {
             while (true) {
                 runCatching {
                     val msgs = GoBridge.getMessages()
-                    updateMessagesText(msgs)
-                    checkForNewIncomingMessage(msgs)
+                    withContext(Dispatchers.Main) {
+                        updateMessagesDisplay(msgs)
+                        checkForNewIncomingMessage(msgs)
+                    }
                 }
                 delay(2000)
             }
         }
     }
 
-    private fun updateMessagesText(msgs: List<ChatMessage>) {
-        val textView = messagesTextView ?: return
-        val scrollView = messagesScrollView ?: return
-
-        if (msgs.isEmpty()) {
-            textView.text = "Aguardando mensagens…"
-            return
-        }
-
-        val sb = SpannableStringBuilder()
-        msgs.takeLast(50).forEach { msg ->
-            if (msg.isOutgoing) {
-                val s = sb.length
-                sb.append("Você")
-                sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(ForegroundColorSpan(Color.parseColor("#5B5BF0")), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(AbsoluteSizeSpan(12, true), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.append("\n")
-            } else {
-                val s = sb.length
-                sb.append(msg.senderName)
-                sb.setSpan(StyleSpan(Typeface.BOLD), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(ForegroundColorSpan(Color.parseColor("#3A3AD0")), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.setSpan(AbsoluteSizeSpan(12, true), s, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                sb.append("\n")
-            }
-            val textStart = sb.length
-            sb.append(msg.text)
-            sb.setSpan(ForegroundColorSpan(Color.parseColor("#1F1F2E")), textStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.setSpan(AbsoluteSizeSpan(13, true), textStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            sb.append("\n\n")
-        }
-        textView.text = sb
-        scrollView.post { scrollView.fullScroll(ScrollView.FOCUS_DOWN) }
-
-        // Only mark messages as "seen" when the window is EXPANDED (user is
-        // actually looking at them). When minimized, we keep lastSeenMessageId
-        // unchanged so that new incoming messages trigger the popup.
-        if (!isMinimized && msgs.isNotEmpty()) {
-            lastSeenMessageId = msgs.last().id
-        }
-    }
-
-    /**
-     * When minimized, shows a popup bubble with the latest incoming message.
-     * The popup auto-hides after 4 seconds.
-     *
-     * IMPORTANT: this must run BEFORE updateMessagesText updates lastSeenMessageId
-     * for the minimized case (handled above — lastSeenMessageId is only advanced
-     * when expanded).
-     */
     private fun checkForNewIncomingMessage(msgs: List<ChatMessage>) {
         if (!isMinimized) return
         if (msgs.isEmpty()) return
-        // Find the latest INCOMING message (skip outgoing ones we sent)
         var newestIncoming: ChatMessage? = null
         for (m in msgs) {
             if (!m.isOutgoing) {
@@ -584,7 +823,6 @@ class FloatingChatService : Service() {
         }
         if (newestIncoming == null) return
         if (newestIncoming.id <= lastSeenMessageId) return
-        // New incoming message!
         lastSeenMessageId = newestIncoming.id
         lastIncomingMessage = newestIncoming
         showMessageBubble(newestIncoming)
@@ -594,7 +832,6 @@ class FloatingChatService : Service() {
         val density = Resources.getSystem().displayMetrics.density
         val dp = { v: Int -> (v * density).toInt() }
 
-        // Update text content
         bubbleSenderText?.text = msg.senderName
         bubbleBodyText?.text = msg.text
 
@@ -603,8 +840,6 @@ class FloatingChatService : Service() {
         else
             @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
-        // Compute position: bubble appears to the RIGHT of the minimized icon.
-        // If the icon is near the right edge, place the bubble to the LEFT instead.
         val iconX = minimizedParams?.x ?: 40
         val iconY = minimizedParams?.y ?: 200
         val iconSize = dp(56)
@@ -615,7 +850,6 @@ class FloatingChatService : Service() {
         val bubbleY = iconY
 
         if (bubbleView == null) {
-            // First time: build and add the bubble as a separate window
             val bubble = buildMessageBubble(dp)
             val params = WindowManager.LayoutParams(
                 bubbleWidth,
@@ -633,7 +867,6 @@ class FloatingChatService : Service() {
             bubbleView = bubble
             bubbleParams = params
         } else {
-            // Update existing bubble's position
             bubbleParams?.let { p ->
                 p.x = bubbleX
                 p.y = bubbleY
@@ -643,7 +876,6 @@ class FloatingChatService : Service() {
         }
         bubbleView?.visibility = View.VISIBLE
 
-        // Auto-hide after 4 seconds
         bubbleHideJob?.cancel()
         bubbleHideJob = scope.launch {
             delay(4000)
@@ -652,9 +884,7 @@ class FloatingChatService : Service() {
     }
 
     private fun hideMessageBubble() {
-        bubbleView?.let {
-            it.visibility = View.GONE
-        }
+        bubbleView?.visibility = View.GONE
     }
 
     private fun buildNotification(): Notification {
@@ -687,7 +917,7 @@ class FloatingChatService : Service() {
         rootView = null
         expandedView = null
         minimizedView = null
-        messagesTextView = null
+        messagesContainer = null
         messagesScrollView = null
         inputEditText = null
         bubbleSenderText = null

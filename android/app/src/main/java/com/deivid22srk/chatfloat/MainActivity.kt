@@ -1,9 +1,13 @@
 package com.deivid22srk.chatfloat
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -17,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.deivid22srk.chatfloat.service.ScreenshotManager
 import com.deivid22srk.chatfloat.ui.AuthViewModel
 import com.deivid22srk.chatfloat.ui.ChatViewModel
 import com.deivid22srk.chatfloat.ui.screens.ChatScreen
@@ -27,8 +32,25 @@ import com.deivid22srk.chatfloat.ui.screens.WelcomeScreen
 import com.deivid22srk.chatfloat.ui.theme.ChatFloatTheme
 
 class MainActivity : ComponentActivity() {
+
+    lateinit var screenshotManager: ScreenshotManager
+        private set
+
+    private lateinit var screenCaptureLauncher: ActivityResultLauncher<Intent>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        screenshotManager = ScreenshotManager(this)
+        screenCaptureLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                screenshotManager.onPermissionResult(result.data)
+            } else {
+                screenshotManager.onPermissionResult(null)
+            }
+        }
+
         enableEdgeToEdge()
         setContent {
             ChatFloatTheme {
@@ -40,6 +62,24 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Handle intent from FloatingChatService requesting screen capture
+        if (intent?.getBooleanExtra("REQUEST_SCREEN_CAPTURE", false) == true) {
+            startScreenCapture()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra("REQUEST_SCREEN_CAPTURE", false)) {
+            startScreenCapture()
+        }
+    }
+
+    fun startScreenCapture() {
+        val mediaProjectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
+            as android.media.projection.MediaProjectionManager
+        screenCaptureLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
     }
 }
 
@@ -51,14 +91,11 @@ fun AppRoot() {
     val authVm: AuthViewModel = viewModel()
     val chatVm: ChatViewModel = viewModel()
 
-    // Initialize the AuthViewModel (which configures the Go backend).
-    // ChatViewModel doesn't need init — it just polls GoBridge.
     LaunchedEffect(Unit) {
         authVm.init(context)
     }
 
     val authState by authVm.state.collectAsState()
-
     var screen by rememberSaveable { mutableStateOf(Screen.Root) }
 
     when (val s = authState) {
@@ -82,13 +119,10 @@ fun AppRoot() {
             }
         }
         is AuthViewModel.AuthState.Authenticated -> {
-            // Start chat polling once authenticated
             LaunchedEffect(s.token) {
                 chatVm.startPolling()
             }
 
-            // If we just created an account and the token is being shown,
-            // CreateAccountScreen handles the transition itself.
             val newlyCreatedToken by authVm.newlyCreatedToken.collectAsState()
             if (newlyCreatedToken != null && screen == Screen.CreateAccount) {
                 CreateAccountScreen(
@@ -102,7 +136,6 @@ fun AppRoot() {
                         onBack = { screen = Screen.Chat }
                     )
                     else -> {
-                        // Default to chat
                         screen = Screen.Chat
                         ChatScreen(
                             viewModel = chatVm,
@@ -116,4 +149,5 @@ fun AppRoot() {
         }
     }
 }
+
 
