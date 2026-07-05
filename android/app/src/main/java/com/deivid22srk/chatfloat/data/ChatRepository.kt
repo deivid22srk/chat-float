@@ -2,6 +2,7 @@ package com.deivid22srk.chatfloat.data
 
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
+import io.github.jan.supabase.channel
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.PostgresAction
@@ -94,5 +95,5 @@ class ChatRepository {
 
     /** Returns a [RealtimeChannel] that must be subscribed + collected by the caller. */
     fun messagesChannel(): RealtimeChannel =
-        client.realtime.channel("public:messages") { }
+        client.channel("public:messages") { }
 }

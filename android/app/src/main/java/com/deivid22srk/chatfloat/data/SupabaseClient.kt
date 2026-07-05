@@ -6,6 +6,7 @@ import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.create
 
 /**
  * Singleton wrapper around the Supabase client.
@@ -22,7 +23,7 @@ object SupabaseClient {
             install(Postgrest)
             install(Realtime)
             // Use the CIO Ktor engine (no native dependencies, works on Android)
-            engine(CIO)
+            httpEngine = CIO.create()
         }
     }
 
