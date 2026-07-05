@@ -1,4 +1,4 @@
-package chatfloat
+package main
 
 // exports.go defines the C ABI that Kotlin calls via JNI.
 //
@@ -28,6 +28,8 @@ import "C"
 import (
 	"encoding/json"
 	"unsafe"
+
+	"chatfloat/chatfloat/internal"
 )
 
 // APIResponse is the standard JSON envelope returned by all exports.
@@ -42,12 +44,12 @@ type APIResponse struct {
 //
 //export Configure
 func Configure(botToken, groupID, dataDir *C.char) *C.char {
-	cfg := Config{
+	cfg := chatfloat.Config{
 		BotToken: C.GoString(botToken),
 		GroupID:  C.GoString(groupID),
 		DataDir:  C.GoString(dataDir),
 	}
-	err := ConfigureAPI(cfg)
+	err := chatfloat.ConfigureAPI(cfg)
 	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
@@ -55,7 +57,7 @@ func Configure(botToken, groupID, dataDir *C.char) *C.char {
 //
 //export CreateAccount
 func CreateAccount(username *C.char) *C.char {
-	token, err := CreateAccountAPI(C.GoString(username))
+	token, err := chatfloat.CreateAccountAPI(C.GoString(username))
 	if err != nil {
 		return jsonResp(APIResponse{OK: false, Error: errString(err)})
 	}
@@ -67,7 +69,7 @@ func CreateAccount(username *C.char) *C.char {
 //
 //export LoginWithToken
 func LoginWithToken(token *C.char) *C.char {
-	err := LoginWithTokenAPI(C.GoString(token))
+	err := chatfloat.LoginWithTokenAPI(C.GoString(token))
 	if err != nil {
 		return jsonResp(APIResponse{OK: false, Error: errString(err)})
 	}
@@ -80,7 +82,7 @@ func LoginWithToken(token *C.char) *C.char {
 func IsLoggedIn() *C.char {
 	return jsonResp(APIResponse{
 		OK:     true,
-		Result: map[string]bool{"logged_in": IsLoggedInAPI()},
+		Result: map[string]bool{"logged_in": chatfloat.IsLoggedInAPI()},
 	})
 }
 
@@ -88,7 +90,7 @@ func IsLoggedIn() *C.char {
 //
 //export GetAccount
 func GetAccount() *C.char {
-	acc := GetAccountAPI()
+	acc := chatfloat.GetAccountAPI()
 	return jsonResp(APIResponse{OK: true, Result: acc})
 }
 
@@ -96,7 +98,7 @@ func GetAccount() *C.char {
 //
 //export UpdateUsername
 func UpdateUsername(newUsername *C.char) *C.char {
-	err := UpdateUsernameAPI(C.GoString(newUsername))
+	err := chatfloat.UpdateUsernameAPI(C.GoString(newUsername))
 	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
@@ -104,7 +106,7 @@ func UpdateUsername(newUsername *C.char) *C.char {
 //
 //export UpdateAvatar
 func UpdateAvatar(avatarBase64 *C.char) *C.char {
-	err := UpdateAvatarAPI(C.GoString(avatarBase64))
+	err := chatfloat.UpdateAvatarAPI(C.GoString(avatarBase64))
 	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
@@ -112,7 +114,7 @@ func UpdateAvatar(avatarBase64 *C.char) *C.char {
 //
 //export SendMessage
 func SendMessage(text *C.char) *C.char {
-	err := SendMessageAPI(C.GoString(text))
+	err := chatfloat.SendMessageAPI(C.GoString(text))
 	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
@@ -120,7 +122,7 @@ func SendMessage(text *C.char) *C.char {
 //
 //export GetMessages
 func GetMessages() *C.char {
-	msgs := GetMessagesAPI()
+	msgs := chatfloat.GetMessagesAPI()
 	return jsonResp(APIResponse{OK: true, Result: map[string]interface{}{"messages": msgs}})
 }
 
@@ -128,7 +130,7 @@ func GetMessages() *C.char {
 //
 //export Logout
 func Logout() *C.char {
-	err := LogoutAPI()
+	err := chatfloat.LogoutAPI()
 	return jsonResp(APIResponse{OK: err == nil, Error: errString(err)})
 }
 
@@ -139,6 +141,9 @@ func Logout() *C.char {
 func FreeString(s *C.char) {
 	C.free(unsafe.Pointer(s))
 }
+
+// main is required for c-shared builds but is never called.
+func main() {}
 
 // --- helpers ---
 
