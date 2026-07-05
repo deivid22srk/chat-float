@@ -2,29 +2,31 @@ package com.deivid22srk.chatfloat.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.graphics.Bitmap
+import android.content.ContentUris
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import androidx.annotation.RequiresApi
 import com.deivid22srk.chatfloat.data.GoBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.withContext
 
 /**
- * Captures screenshots via AccessibilityService.takeScreenshot() (API 31+).
+ * Captures screenshots via GLOBAL_ACTION_TAKE_SCREENSHOT (API 30+).
  *
  * Flow:
  *   1. User taps 📸 in floating overlay
  *   2. Overlay is hidden (INVISIBLE)
- *   3. After 500ms, takeScreenshot() captures the screen bitmap
- *   4. Bitmap → JPEG → GoBridge.sendMediaMessage → uploaded to Supabase
- *   5. Overlay is shown again
+ *   3. After 500ms, performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT) is called
+ *   4. System captures the screen and saves to gallery (MediaStore)
+ *   5. After 2s, we query MediaStore for the latest screenshot file
+ *   6. Read the file bytes, upload via GoBridge.sendMediaMessage as image
+ *   7. Overlay is shown again
  */
 class ScreenshotAccessibilityService : AccessibilityService() {
 
@@ -41,10 +43,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
         fun requestScreenshot(): Boolean {
             val svc = instance ?: return false
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                Log.w(TAG, "takeScreenshot requires API 31+")
-                return false
-            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
             Log.d(TAG, "Requesting screenshot")
             onScreenshotStart?.invoke()
             mainHandler.postDelayed({ svc.captureAndSend() }, 500)
@@ -64,46 +63,85 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         serviceInfo = info
     }
 
-    @RequiresApi(Build.VERSION_CODES.S)
     private fun captureAndSend() {
         try {
-            this.takeScreenshot(mainExecutor, object : TakeScreenshotCallback {
-                override fun onSuccess(screenshotResult: ScreenshotResult) {
-                    Log.d(TAG, "Screenshot captured successfully")
-                    val bitmap = screenshotResult.hardwareBitmap
-                    scope.launch {
-                        processAndSend(bitmap)
-                    }
-                }
+            // Record timestamp before screenshot
+            val beforeTime = System.currentTimeMillis()
 
-                override fun onFailure(errorCode: Int) {
-                    Log.e(TAG, "Screenshot failed: errorCode=$errorCode")
-                    onScreenshotDone?.invoke()
+            // Trigger system screenshot
+            val ok = performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+            Log.d(TAG, "GLOBAL_ACTION_TAKE_SCREENSHOT result: $ok")
+
+            if (!ok) {
+                Log.e(TAG, "Failed to trigger screenshot")
+                onScreenshotDone?.invoke()
+                return
+            }
+
+            // Wait 2.5s for system to save the screenshot file, then read it
+            mainHandler.postDelayed({
+                scope.launch {
+                    readAndUploadScreenshot(beforeTime)
                 }
-            })
+            }, 2500)
         } catch (e: Exception) {
             Log.e(TAG, "captureAndSend exception", e)
             onScreenshotDone?.invoke()
         }
     }
 
-    private suspend fun processAndSend(bitmap: Bitmap) {
+    private suspend fun readAndUploadScreenshot(beforeTime: Long) {
         try {
-            // Copy hardware bitmap to software (needed for JPEG compression)
-            val softwareBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-            bitmap.recycle()
+            val bytes = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                // Query MediaStore for screenshots taken after beforeTime
+                val projection = arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.DATE_ADDED
+                )
+                val selection = "${MediaStore.Images.Media.DATE_ADDED} >= ?"
+                val selectionArgs = arrayOf((beforeTime / 1000).toString())
+                val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
-            val outputStream = ByteArrayOutputStream()
-            softwareBitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
-            softwareBitmap.recycle()
-            val jpegBytes = outputStream.toByteArray()
+                val cursor = contentResolver.query(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )
 
-            Log.d(TAG, "Screenshot processed: ${jpegBytes.size} bytes (${jpegBytes.size / 1024}KB)")
+                if (cursor == null || !cursor.moveToFirst()) {
+                    Log.e(TAG, "No screenshot found in MediaStore")
+                    cursor?.close()
+                    return@withContext null
+                }
 
-            // Upload as image message via Go
-            GoBridge.sendMediaMessage(jpegBytes, "image", "image/jpeg", "📸 Screenshot")
+                val idIdx = cursor.getColumnIndex(MediaStore.Images.Media._ID)
+                val nameIdx = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                val id = cursor.getLong(idIdx)
+                val name = cursor.getString(nameIdx)
+                cursor.close()
+
+                Log.d(TAG, "Found screenshot: $name (id=$id)")
+
+                // Read the file content
+                val uri = ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
+                )
+                contentResolver.openInputStream(uri)?.use { input ->
+                    input.readBytes()
+                }
+            }
+
+            if (bytes != null && bytes.isNotEmpty()) {
+                Log.d(TAG, "Screenshot read: ${bytes.size} bytes (${bytes.size / 1024}KB)")
+                GoBridge.sendMediaMessage(bytes, "image", "image/jpeg", "📸 Screenshot")
+            } else {
+                Log.e(TAG, "Failed to read screenshot bytes")
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "processAndSend error", e)
+            Log.e(TAG, "readAndUploadScreenshot error", e)
         } finally {
             onScreenshotDone?.invoke()
         }
