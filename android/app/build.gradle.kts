@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.deivid22srk.chatfloat"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.deivid22srk.chatfloat"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
 
