@@ -8,15 +8,16 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val LightColors = lightColorScheme(
     primary = IndigoPrimary,
-    onPrimary = androidx.compose.ui.graphics.Color.White,
+    onPrimary = Color.White,
     primaryContainer = Color(0xFFE0E7FF),
     onPrimaryContainer = IndigoDark,
     secondary = VioletAccent,
-    onSecondary = androidx.compose.ui.graphics.Color.White,
+    onSecondary = Color.White,
     tertiary = PinkAccent,
     background = SurfaceLight,
     onBackground = TextPrimary,
@@ -65,6 +66,3 @@ fun ChatFloatTheme(
         content = content
     )
 }
-
-// Local alias to avoid fully-qualifying in this file
-private val Color = androidx.compose.ui.graphics.Color
