@@ -289,11 +289,11 @@ class FloatingChatService : Service() {
             gravity = Gravity.START
         }
 
-        val btnQuickEmoji = makeActionButton(dp, "👍", "Like")
+        val btnScreenshot = makeActionButton(dp, "📸", "Print")
         val btnCopy = makeActionButton(dp, "📋", "Copiar")
         val btnClear = makeActionButton(dp, "🗑", "Limpar")
         val btnScroll = makeActionButton(dp, "⬇", "Rolar")
-        actionRow.addView(btnQuickEmoji)
+        actionRow.addView(btnScreenshot)
         actionRow.addView(btnCopy)
         actionRow.addView(btnClear)
         actionRow.addView(btnScroll)
@@ -406,9 +406,7 @@ class FloatingChatService : Service() {
             scope.launch { GoBridge.sendMessage(text.trim()) }
         }
 
-        btnQuickEmoji.setOnClickListener {
-            scope.launch { GoBridge.sendMessage("👍") }
-        }
+        btnScreenshot.setOnClickListener { handleScreenshot() }
         btnCopy.setOnClickListener { handleCopyLastMessage() }
         btnClear.setOnClickListener { handleClearDisplay() }
         btnScroll.setOnClickListener {
@@ -645,6 +643,28 @@ class FloatingChatService : Service() {
     // Action panel handlers
     // ============================================================
 
+    private fun handleScreenshot() {
+        if (com.deivid22srk.chatfloat.service.ScreenshotAccessibilityService.isEnabled()) {
+            // Accessibility service is running — take the screenshot
+            Toast.makeText(this, "Capturando tela…", Toast.LENGTH_SHORT).show()
+            val ok = com.deivid22srk.chatfloat.service.ScreenshotAccessibilityService.requestScreenshot()
+            if (!ok) {
+                Toast.makeText(this, "Falha ao capturar. Tente novamente.", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            // Need to enable the accessibility service first
+            Toast.makeText(
+                this,
+                "Ative o ChatFloat em Acessibilidade para usar o Print",
+                Toast.LENGTH_LONG
+            ).show()
+            val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+        }
+    }
+
     private fun handleCopyLastMessage() {
         val last = cachedMessages.lastOrNull { !it.isOutgoing } ?: run {
             Toast.makeText(this, "Nenhuma mensagem para copiar", Toast.LENGTH_SHORT).show()
@@ -733,8 +753,8 @@ class FloatingChatService : Service() {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 cornerRadius = dp(14).toFloat()
-                setColor(Color.parseColor("#F2F2F8"))
-                setStroke(dp(1), Color.parseColor("#E0E0EA"))
+                setColor(colorSurfaceElevated)
+                setStroke(dp(1), colorOutline)
             }
             setPadding(dp(14), dp(10), dp(14), dp(12))
             elevation = dp(8).toFloat()

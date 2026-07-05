@@ -17,4 +17,5 @@
     <string name="close">Fechar</string>
     <string name="collapse">Recolher</string>
     <string name="expand">Expandir</string>
+    <string name="accessibility_service_desc">Permite tirar screenshots da tela para enviar no chat flutuante. Não lê nem interfere com o conteúdo da tela.</string>
 </resources>
