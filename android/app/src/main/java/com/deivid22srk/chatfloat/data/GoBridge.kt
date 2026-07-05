@@ -76,9 +76,6 @@ object GoBridge {
     /** Logout() -> json */
     private external fun Logout(): String
 
-    /** FreeString(s) — frees a string allocated by Go */
-    private external fun FreeString(s: String)
-
     // ============================================================
     // Kotlin-friendly wrappers
     // ============================================================
