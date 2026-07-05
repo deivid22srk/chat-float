@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -34,27 +35,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.deivid22srk.chatfloat.data.ChatMessage
-import com.deivid22srk.chatfloat.ui.theme.BrandPrimary
 import com.deivid22srk.chatfloat.ui.theme.BubbleIncoming
+import com.deivid22srk.chatfloat.ui.theme.BubbleIncomingText
 import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoing
+import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoingText
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun MessageBubble(message: ChatMessage) {
     val isOutgoing = message.isOutgoing
     val alignment = if (isOutgoing) Alignment.End else Alignment.Start
     val bubbleColor = if (isOutgoing) BubbleOutgoing else BubbleIncoming
-    // Use explicit colors so they don't depend on the system dark/light theme
-    // (the dark theme's onSurface is light gray, which is invisible on the
-    // light BubbleIncoming background).
-    val textColor = if (isOutgoing) Color.White else Color(0xFF1F1F2E)
-    val senderColor = if (isOutgoing) Color.White else BrandPrimary
+    val textColor = if (isOutgoing) BubbleOutgoingText else BubbleIncomingText
+    val senderColor = if (isOutgoing) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.primary
+    val timeColor = if (isOutgoing) Color.White.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 3.dp),
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
     ) {
         // Avatar (only for incoming)
@@ -68,6 +71,7 @@ fun MessageBubble(message: ChatMessage) {
             Spacer(Modifier.size(8.dp))
         }
 
+        // Bubble
         Column(horizontalAlignment = alignment) {
             if (!isOutgoing) {
                 Text(
@@ -75,7 +79,7 @@ fun MessageBubble(message: ChatMessage) {
                     fontSize = 12.sp,
                     color = senderColor,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                    modifier = Modifier.padding(start = 10.dp, bottom = 2.dp)
                 )
             }
             Box(
@@ -84,40 +88,51 @@ fun MessageBubble(message: ChatMessage) {
                     .wrapContentWidth(alignment)
                     .clip(
                         RoundedCornerShape(
-                            topStart = 16.dp,
-                            topEnd = 16.dp,
-                            bottomStart = if (isOutgoing) 16.dp else 4.dp,
-                            bottomEnd = if (isOutgoing) 4.dp else 16.dp
+                            topStart = 18.dp,
+                            topEnd = 18.dp,
+                            bottomStart = if (isOutgoing) 18.dp else 4.dp,
+                            bottomEnd = if (isOutgoing) 4.dp else 18.dp
                         )
                     )
                     .background(bubbleColor)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Text(
-                    text = message.text,
-                    color = textColor,
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp
-                )
+                Column {
+                    Text(
+                        text = message.text,
+                        color = textColor,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = formatTime(message.timestamp),
+                        fontSize = 10.sp,
+                        color = timeColor,
+                        modifier = Modifier.align(Alignment.End)
+                    )
+                }
             }
         }
     }
 }
 
+private fun formatTime(timestampMs: Long): String {
+    if (timestampMs <= 0) return ""
+    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestampMs))
+}
+
 /**
  * Avatar composable. Tries to load from [url] first (Supabase Storage URL),
  * falls back to [base64] if [url] is null, then falls back to initials.
- *
- * The URL is fetched on a background thread and decoded off the main thread.
  */
 @Composable
 fun Avatar(url: String?, base64: String?, initials: String, size: Int) {
     val modifier = Modifier
         .size(size.dp)
         .clip(CircleShape)
-        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
 
-    // State holding the loaded bitmap (from URL or base64)
     var loadedBitmap by remember(url, base64) { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     // Try base64 first (synchronous, fast)

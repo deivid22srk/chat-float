@@ -1,6 +1,5 @@
 package com.deivid22srk.chatfloat.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -12,19 +11,38 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val LightColors = lightColorScheme(
-    primary = BrandPrimary,
+    primary = IndigoPrimary,
     onPrimary = androidx.compose.ui.graphics.Color.White,
-    secondary = PurpleGrey40,
-    background = BrandBackground,
-    surface = BrandSurface,
-    onSurface = BrandTextPrimary,
-    onBackground = BrandTextPrimary
+    primaryContainer = Color(0xFFE0E7FF),
+    onPrimaryContainer = IndigoDark,
+    secondary = VioletAccent,
+    onSecondary = androidx.compose.ui.graphics.Color.White,
+    tertiary = PinkAccent,
+    background = SurfaceLight,
+    onBackground = TextPrimary,
+    surface = SurfaceElevated,
+    onSurface = TextPrimary,
+    surfaceVariant = SurfaceVariant,
+    onSurfaceVariant = TextSecondary,
+    outline = Outline,
+    outlineVariant = Outline
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = Color(0xFF818CF8),
+    onPrimary = Color(0xFF1E1B4B),
+    primaryContainer = IndigoDark,
+    onPrimaryContainer = Color(0xFFE0E7FF),
+    secondary = Color(0xFFA78BFA),
+    onSecondary = Color(0xFF2E1065),
+    background = Color(0xFF0F0F14),
+    onBackground = Color(0xFFFAFAFC),
+    surface = Color(0xFF1A1A22),
+    onSurface = Color(0xFFFAFAFC),
+    surfaceVariant = Color(0xFF27272E),
+    onSurfaceVariant = Color(0xFFD4D4D8),
+    outline = Color(0xFF3F3F46),
+    outlineVariant = Color(0xFF27272E)
 )
 
 @Composable
@@ -47,3 +65,6 @@ fun ChatFloatTheme(
         content = content
     )
 }
+
+// Local alias to avoid fully-qualifying in this file
+private val Color = androidx.compose.ui.graphics.Color

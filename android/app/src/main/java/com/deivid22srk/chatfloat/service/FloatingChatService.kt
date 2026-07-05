@@ -61,12 +61,19 @@ class FloatingChatService : Service() {
     private var rootView: View? = null
     private var expandedView: View? = null
     private var minimizedView: View? = null
-    private var minimizedBubbleView: View? = null
     private var messagesTextView: TextView? = null
     private var messagesScrollView: ScrollView? = null
     private var inputEditText: EditText? = null
     private var expandedParams: WindowManager.LayoutParams? = null
     private var minimizedParams: WindowManager.LayoutParams? = null
+
+    // Bubble popup is a SEPARATE window so it can be positioned independently
+    // of the minimized icon (FrameLayout margins inside a WindowManager view
+    // don't translate to screen coordinates correctly).
+    private var bubbleView: View? = null
+    private var bubbleParams: WindowManager.LayoutParams? = null
+    private var bubbleSenderText: TextView? = null
+    private var bubbleBodyText: TextView? = null
 
     private var isMinimized = false
     private var lastSeenMessageId: Long = 0L
@@ -101,6 +108,7 @@ class FloatingChatService : Service() {
         val dp = { v: Int -> (v * density).toInt() }
 
         // Root container that holds both expanded and minimized views.
+        // The bubble popup is a SEPARATE window (added in showBubble()).
         val root = FrameLayout(this)
 
         // --- Expanded view ---
@@ -114,15 +122,6 @@ class FloatingChatService : Service() {
         val minimized = buildMinimizedView(dp)
         minimized.visibility = View.GONE
         root.addView(minimized, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.START
-        ))
-
-        // --- New-message bubble (hidden initially) ---
-        val bubble = buildMessageBubble(dp)
-        bubble.visibility = View.GONE
-        root.addView(bubble, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.START
@@ -151,7 +150,6 @@ class FloatingChatService : Service() {
         rootView = root
         expandedView = expanded
         minimizedView = minimized
-        minimizedBubbleView = bubble
         expandedParams = params
     }
 
@@ -419,8 +417,8 @@ class FloatingChatService : Service() {
                 setColor(Color.parseColor("#F2F2F8"))
                 setStroke(dp(1), Color.parseColor("#E0E0EA"))
             }
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            elevation = dp(6).toFloat()
+            setPadding(dp(14), dp(10), dp(14), dp(12))
+            elevation = dp(8).toFloat()
         }
         val sender = TextView(ctx).apply {
             text = ""
@@ -433,16 +431,13 @@ class FloatingChatService : Service() {
             setTextColor(Color.parseColor("#1F1F2E"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             maxLines = 3
+            setPadding(0, dp(2), 0, 0)
         }
         bubble.addView(sender)
         bubble.addView(body)
-        // Position the bubble next to the icon
-        bubble.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.START
-        )
-        bubble.tag = Pair(sender, body)
+        // Store refs for later updates
+        bubbleSenderText = sender
+        bubbleBodyText = body
         return bubble
     }
 
@@ -483,7 +478,6 @@ class FloatingChatService : Service() {
         if (!isMinimized) return
         isMinimized = false
         minimizedView?.visibility = View.GONE
-        minimizedBubbleView?.visibility = View.GONE
         expandedView?.visibility = View.VISIBLE
         val density = Resources.getSystem().displayMetrics.density
         val dp = { v: Int -> (v * density).toInt() }
@@ -492,10 +486,11 @@ class FloatingChatService : Service() {
             p.height = WindowManager.LayoutParams.WRAP_CONTENT
             rootView?.let { windowManager.updateViewLayout(it, p) }
         }
+        // Hide the bubble popup if visible
+        bubbleHideJob?.cancel()
+        hideMessageBubble()
         // Mark the current last message as seen so we don't re-popup old
         // messages next time we minimize. Fetch the latest from Go.
-        bubbleHideJob?.cancel()
-        minimizedBubbleView?.visibility = View.GONE
         scope.launch {
             runCatching {
                 val msgs = GoBridge.getMessages()
@@ -596,30 +591,69 @@ class FloatingChatService : Service() {
     }
 
     private fun showMessageBubble(msg: ChatMessage) {
-        val bubble = minimizedBubbleView ?: return
-        val pair = bubble.tag as? Pair<TextView, TextView> ?: return
-        pair.first.text = msg.senderName
-        pair.second.text = msg.text
-        bubble.visibility = View.VISIBLE
+        val density = Resources.getSystem().displayMetrics.density
+        val dp = { v: Int -> (v * density).toInt() }
 
-        // Position bubble to the right of the minimized icon
-        minimizedParams?.let { p ->
-            val bubbleParams = bubble.layoutParams as? FrameLayout.LayoutParams ?: return
-            val density = Resources.getSystem().displayMetrics.density
-            val dp = { v: Int -> (v * density).toInt() }
-            // The FrameLayout gravity is set to TOP|START; we use leftMargin/topMargin
-            // to offset the bubble to the right of the icon
-            bubbleParams.leftMargin = (p.x ?: 0) + dp(64)
-            bubbleParams.topMargin = (p.y ?: 0) + dp(8)
-            bubbleParams.width = dp(200)
-            bubble.layoutParams = bubbleParams
+        // Update text content
+        bubbleSenderText?.text = msg.senderName
+        bubbleBodyText?.text = msg.text
+
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else
+            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+
+        // Compute position: bubble appears to the RIGHT of the minimized icon.
+        // If the icon is near the right edge, place the bubble to the LEFT instead.
+        val iconX = minimizedParams?.x ?: 40
+        val iconY = minimizedParams?.y ?: 200
+        val iconSize = dp(56)
+        val bubbleWidth = dp(220)
+        val displayWidth = Resources.getSystem().displayMetrics.widthPixels
+        val placeOnRight = iconX + iconSize + bubbleWidth + dp(16) < displayWidth
+        val bubbleX = if (placeOnRight) iconX + iconSize + dp(8) else iconX - bubbleWidth - dp(8)
+        val bubbleY = iconY
+
+        if (bubbleView == null) {
+            // First time: build and add the bubble as a separate window
+            val bubble = buildMessageBubble(dp)
+            val params = WindowManager.LayoutParams(
+                bubbleWidth,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = bubbleX
+                y = bubbleY
+            }
+            windowManager.addView(bubble, params)
+            bubbleView = bubble
+            bubbleParams = params
+        } else {
+            // Update existing bubble's position
+            bubbleParams?.let { p ->
+                p.x = bubbleX
+                p.y = bubbleY
+                p.width = bubbleWidth
+                runCatching { windowManager.updateViewLayout(bubbleView, p) }
+            }
         }
+        bubbleView?.visibility = View.VISIBLE
 
         // Auto-hide after 4 seconds
         bubbleHideJob?.cancel()
         bubbleHideJob = scope.launch {
             delay(4000)
-            bubble.visibility = View.GONE
+            hideMessageBubble()
+        }
+    }
+
+    private fun hideMessageBubble() {
+        bubbleView?.let {
+            it.visibility = View.GONE
         }
     }
 
@@ -647,14 +681,17 @@ class FloatingChatService : Service() {
         pollingJob?.cancel()
         pollingJob = null
         bubbleHideJob?.cancel()
+        bubbleView?.let { runCatching { windowManager.removeView(it) } }
+        bubbleView = null
         rootView?.let { runCatching { windowManager.removeView(it) } }
         rootView = null
         expandedView = null
         minimizedView = null
-        minimizedBubbleView = null
         messagesTextView = null
         messagesScrollView = null
         inputEditText = null
+        bubbleSenderText = null
+        bubbleBodyText = null
         scope.coroutineContext[Job]?.cancel()
     }
 

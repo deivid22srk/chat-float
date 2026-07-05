@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -31,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -44,6 +46,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -80,24 +84,49 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(
-                            url = avatarUrl,
-                            base64 = null,
-                            initials = username.take(2).uppercase(),
-                            size = 36
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.linearGradient(
+                                        listOf(
+                                            MaterialTheme.colorScheme.primary,
+                                            MaterialTheme.colorScheme.secondary
+                                        )
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Avatar(
+                                url = avatarUrl,
+                                base64 = null,
+                                initials = username.take(2).uppercase(),
+                                size = 40
+                            )
+                        }
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
                                 "ChatFloat",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 18.sp
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp,
+                                color = Color.White
                             )
-                            Text(
-                                "Conectado como $username",
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.85f)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF34D399))
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    "Conectado como $username",
+                                    fontSize = 11.sp,
+                                    color = Color.White.copy(alpha = 0.85f)
+                                )
+                            }
                         }
                     }
                 },
@@ -116,10 +145,10 @@ fun ChatScreen(
                             context.startService(intent)
                         }
                     }) {
-                        Icon(Icons.Filled.PictureInPicture, contentDescription = "Janela flutuante")
+                        Icon(Icons.Filled.PictureInPicture, contentDescription = "Janela flutuante", tint = Color.White)
                     }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Configurações")
+                        Icon(Icons.Filled.Settings, contentDescription = "Configurações", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -134,7 +163,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(8.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
                     .imePadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -142,9 +171,15 @@ fun ChatScreen(
                     value = input,
                     onValueChange = { input = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Digite uma mensagem…") },
+                    placeholder = { Text("Digite uma mensagem…", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
                     maxLines = 4,
-                    shape = RoundedCornerShape(20.dp)
+                    shape = RoundedCornerShape(24.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
                 )
                 Spacer(Modifier.width(8.dp))
                 IconButton(
@@ -154,18 +189,28 @@ fun ChatScreen(
                             input = ""
                         }
                     },
-                    enabled = input.isNotBlank() && !sending
+                    enabled = input.isNotBlank() && !sending,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (input.isNotBlank() && !sending)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                        )
                 ) {
                     if (sending) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
+                            strokeWidth = 2.dp,
+                            color = Color.White
                         )
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Enviar",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = Color.White
                         )
                     }
                 }
@@ -184,12 +229,15 @@ fun ChatScreen(
                 ) {
                     Text(
                         "Sem mensagens ainda",
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                     )
+                    Spacer(Modifier.size(4.dp))
                     Text(
-                        "Diga oi!",
+                        "Diga oi! 👋",
                         fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
                 }
             } else {
