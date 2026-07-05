@@ -4,10 +4,12 @@ import com.deivid22srk.chatfloat.BuildConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.FormDataContent
 import io.ktor.http.Parameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -62,11 +64,12 @@ class TelegramBotRepository {
     suspend fun sendMessage(text: String, localUsername: String): ChatMessage =
         withContext(Dispatchers.IO) {
             val formatted = "$localUsername: $text"
+            val params = Parameters.build {
+                append("chat_id", groupId)
+                append("text", formatted)
+            }
             val response = httpClient.post("$baseUrl/sendMessage") {
-                body = FormDataContent(Parameters.build {
-                    append("chat_id", groupId)
-                    append("text", formatted)
-                })
+                setBody(FormDataContent(params))
             }
             val raw = response.bodyAsText()
             val parsed: TelegramResponse<SendMessageResponse> =
