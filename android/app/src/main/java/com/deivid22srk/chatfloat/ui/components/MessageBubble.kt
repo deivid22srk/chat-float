@@ -39,6 +39,8 @@ import com.deivid22srk.chatfloat.ui.theme.BubbleIncoming
 import com.deivid22srk.chatfloat.ui.theme.BubbleIncomingText
 import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoing
 import com.deivid22srk.chatfloat.ui.theme.BubbleOutgoingText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -143,12 +145,13 @@ fun Avatar(url: String?, base64: String?, initials: String, size: Int) {
         }.getOrNull()
     }
 
-    // Load from URL asynchronously
+    // Load from URL asynchronously on IO dispatcher (network calls on main
+    // thread throw NetworkOnMainThreadException)
     LaunchedEffect(url) {
         if (loadedBitmap == null && url != null && url.isNotEmpty()) {
-            loadedBitmap = runCatching {
-                loadBitmapFromUrl(url)
-            }.getOrNull()
+            loadedBitmap = withContext(Dispatchers.IO) {
+                runCatching { loadBitmapFromUrl(url) }.getOrNull()
+            }
         }
     }
 
