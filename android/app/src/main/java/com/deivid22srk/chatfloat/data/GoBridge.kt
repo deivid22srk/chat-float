@@ -185,6 +185,7 @@ object GoBridge {
     // Helpers
     // ============================================================
 
+    @kotlinx.serialization.Serializable
     private data class GoResponse(
         val ok: Boolean,
         val result: JsonObject? = null,
