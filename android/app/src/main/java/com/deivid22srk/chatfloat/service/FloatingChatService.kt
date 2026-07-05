@@ -606,23 +606,14 @@ class FloatingChatService : Service() {
 
     private fun handleScreenshot() {
         Toast.makeText(this, "Solicitando permissão para captura de tela…", Toast.LENGTH_SHORT).show()
-        // Launch MainActivity to request MediaProjection permission
+        // Launch MainActivity to request MediaProjection permission.
+        // The ScreenshotManager (held by MainActivity) will capture the screen
+        // and send a chat message after the user grants permission.
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
             putExtra("REQUEST_SCREEN_CAPTURE", true)
         }
         startActivity(intent)
-        // After permission is granted, the ScreenshotManager captures and
-        // sends a message. We can't capture directly from the service without
-        // permission, so we just send a placeholder message for now.
-        // The actual screenshot capture happens in ScreenshotManager after
-        // the user grants permission.
-        scope.launch {
-            // Send a marker message — the screenshot bytes will be uploaded
-            // to Supabase Storage and the message will include the URL once
-            // the screenshot is captured.
-            GoBridge.sendMessage("📸 Screenshot")
-        }
     }
 
     private fun handleCopyLastMessage() {
