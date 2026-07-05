@@ -11,7 +11,7 @@ androidxActivityCompose = "1.9.3"
 composeBom = "2024.11.00"
 navigationCompose = "2.8.4"
 ktor = "3.4.3"
-room = "2.6.1"
+room = "2.7.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "androidxCoreKtx" }
