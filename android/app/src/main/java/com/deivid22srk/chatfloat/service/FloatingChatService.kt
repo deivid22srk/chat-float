@@ -583,7 +583,7 @@ class FloatingChatService : Service() {
 
             val bubble = TextView(this).apply {
                 text = msg.text
-                setTextColor(if (isOutgoing) Color.White else colorTextPrimary)
+                setTextColor(if (isOutgoing) Color.WHITE else colorTextPrimary)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setPadding(dp(10), dp(7), dp(10), dp(7))
                 background = GradientDrawable().apply {
