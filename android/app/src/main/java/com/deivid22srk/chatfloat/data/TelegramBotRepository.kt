@@ -2,7 +2,6 @@ package com.deivid22srk.chatfloat.data
 
 import com.deivid22srk.chatfloat.BuildConfig
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.forms.FormDataContent
@@ -70,7 +69,8 @@ class TelegramBotRepository {
                 })
             }
             val raw = response.bodyAsText()
-            val parsed = json.decodeFromString(TelegramResponse<SendMessageResponse>(serializer()), raw)
+            val parsed: TelegramResponse<SendMessageResponse> =
+                json.decodeFromString(raw)
             if (parsed.ok && parsed.result != null) {
                 val r = parsed.result
                 ChatMessage(
@@ -100,7 +100,8 @@ class TelegramBotRepository {
             "&allowed_updates=%5B%22message%22%5D"
         val response = httpClient.get(url)
         val raw = response.bodyAsText()
-        val parsed = json.decodeFromString(TelegramResponse<List<TelegramUpdate>>(serializer()), raw)
+        val parsed: TelegramResponse<List<TelegramUpdate>> =
+            json.decodeFromString(raw)
         if (!parsed.ok) return@withContext emptyList()
 
         val updates = parsed.result ?: return@withContext emptyList()
@@ -149,7 +150,7 @@ class TelegramBotRepository {
         runCatching {
             val response = httpClient.get("$baseUrl/getMe")
             val raw = response.bodyAsText()
-            val parsed = json.decodeFromString(TelegramResponse<TelegramUser>(serializer()), raw)
+            val parsed: TelegramResponse<TelegramUser> = json.decodeFromString(raw)
             parsed.ok
         }.getOrDefault(false)
     }
