@@ -12,13 +12,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.deivid22srk.chatfloat.data.TelegramBotRepository
 import com.deivid22srk.chatfloat.ui.AuthViewModel
 import com.deivid22srk.chatfloat.ui.ChatViewModel
 import com.deivid22srk.chatfloat.ui.screens.ChatScreen
@@ -53,12 +51,10 @@ fun AppRoot() {
     val authVm: AuthViewModel = viewModel()
     val chatVm: ChatViewModel = viewModel()
 
-    val telegramRepo = remember { TelegramBotRepository() }
-
-    // Initialize view models with the repo + context
+    // Initialize the AuthViewModel (which configures the Go backend).
+    // ChatViewModel doesn't need init — it just polls GoBridge.
     LaunchedEffect(Unit) {
-        authVm.init(context, telegramRepo)
-        chatVm.init(context, telegramRepo)
+        authVm.init(context)
     }
 
     val authState by authVm.state.collectAsState()
@@ -120,3 +116,4 @@ fun AppRoot() {
         }
     }
 }
+

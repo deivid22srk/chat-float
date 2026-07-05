@@ -163,11 +163,11 @@ object GoBridge {
     suspend fun getMessages(): List<ChatMessage> = withContext(Dispatchers.IO) {
         runCatching {
             val resp = call { GetMessages() }
-            val arr = resp.result?.get("messages") ?: return@runCatching emptyList()
-            arr.toString() // For simplicity, parse via Json.decodeFromString
+            val msgsElement = resp.result?.get("messages") ?: return@runCatching emptyList()
+            // Re-serialize the JSON element to a string and parse as List<ChatMessage>
             val msgsJson = json.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.json.JsonElement.serializer()),
-                arr
+                kotlinx.serialization.json.JsonElement.serializer(),
+                msgsElement
             )
             json.decodeFromString<List<ChatMessage>>(msgsJson)
         }.getOrDefault(emptyList())

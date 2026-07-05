@@ -49,6 +49,8 @@ class FloatingChatService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var rootView: View? = null
+    private var messagesTextView: TextView? = null
+    private var messagesScrollView: ScrollView? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var pollingJob: Job? = null
@@ -238,6 +240,8 @@ class FloatingChatService : Service() {
         // === Add the view ===
         windowManager.addView(root, params)
         rootView = root
+        messagesTextView = messagesText
+        messagesScrollView = scrollView
     }
 
     private fun startPolling() {
@@ -254,10 +258,8 @@ class FloatingChatService : Service() {
     }
 
     private fun updateMessagesText(msgs: List<com.deivid22srk.chatfloat.data.ChatMessage>) {
-        val rootView = rootView ?: return
-        val scrollView = rootView.findViewById<ScrollView>(android.R.id.text1) ?: return
-        // Find the TextView inside the ScrollView
-        val textView = (scrollView.getChildAt(0) as? TextView) ?: return
+        val textView = messagesTextView ?: return
+        val scrollView = messagesScrollView ?: return
 
         if (msgs.isEmpty()) {
             textView.text = "Aguardando mensagens…"
@@ -315,6 +317,8 @@ class FloatingChatService : Service() {
             runCatching { windowManager.removeView(it) }
         }
         rootView = null
+        messagesTextView = null
+        messagesScrollView = null
         scope.coroutineContext[Job]?.cancel()
     }
 
