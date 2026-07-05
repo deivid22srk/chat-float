@@ -14,8 +14,8 @@ android {
         applicationId = "com.deivid22srk.chatfloat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 16
-        versionName = "5.6.1"
+        versionCode = 17
+        versionName = "5.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

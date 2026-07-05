@@ -20,7 +20,6 @@ type Session struct {
         mu          sync.Mutex
         account     *Account
         supabase    *SupabaseClient
-        realtime    *RealtimeClient
         dataDir     string
 
         // Cache: messages and account lookups to avoid redundant HTTP requests
@@ -259,18 +258,18 @@ func SendMessageAPI(text string) error {
         if msg.ID > globalSession.lastMessageID {
                 globalSession.lastMessageID = msg.ID
         }
-        globalSession.messagesLoaded = true // we have at least one message now
-
-        // Start realtime if not already started
-        if globalSession.realtime == nil {
-                startRealtime()
-        }
+        globalSession.messagesLoaded = true
         return nil
 }
 
-// GetMessagesAPI returns cached messages (no HTTP request if already loaded).
-// On first call, fetches all messages from Supabase and starts the Realtime
-// WebSocket listener. Subsequent calls return the local cache instantly.
+// GetMessagesAPI returns cached messages. On each call, also fetches any
+// new messages (id > lastMessageID) from Supabase and appends them to the
+// cache. This is an efficient polling approach — each call makes at most
+// 1 HTTP request that returns only NEW messages (usually 0 or 1 row).
+//
+// The Supabase Realtime WebSocket approach was attempted but the message
+// format didn't work reliably with Supabase v2. Polling with id > last
+// is simple, efficient, and works everywhere.
 func GetMessagesAPI() ([]ChatMessage, error) {
         globalSession.mu.Lock()
         defer globalSession.mu.Unlock()
@@ -279,22 +278,40 @@ func GetMessagesAPI() ([]ChatMessage, error) {
                 return nil, errors.New("not configured")
         }
 
-        // If messages haven't been loaded yet, do an initial fetch
-        if !globalSession.messagesLoaded {
-                msgs, err := globalSession.supabase.GetMessages(0)
-                if err != nil {
-                        return nil, err
+        // Fetch new messages since lastMessageID
+        newMsgs, err := globalSession.supabase.GetMessages(globalSession.lastMessageID)
+        if err != nil {
+                // On error, return what we have in cache
+                if globalSession.messagesLoaded {
+                        out := make([]ChatMessage, len(globalSession.cachedMessages))
+                        copy(out, globalSession.cachedMessages)
+                        return out, nil
                 }
-                // Enrich and mark outgoing
-                enrichMessages(msgs)
-                globalSession.cachedMessages = msgs
-                if len(msgs) > 0 {
-                        globalSession.lastMessageID = msgs[len(msgs)-1].ID
-                }
-                globalSession.messagesLoaded = true
+                return nil, err
+        }
 
-                // Start the Realtime listener (fire-and-forget)
-                startRealtime()
+        if len(newMsgs) > 0 {
+                // Enrich new messages
+                enrichMessages(newMsgs)
+
+                // Fetch account info for any new senders not in cache
+                for _, m := range newMsgs {
+                        if m.SenderToken != "" {
+                                if _, ok := globalSession.accountCache[m.SenderToken]; !ok {
+                                        if acc, err := globalSession.supabase.GetAccountByToken(m.SenderToken); err == nil && acc != nil {
+                                                globalSession.accountCache[m.SenderToken] = acc
+                                        }
+                                }
+                        }
+                }
+
+                // Re-enrich with updated cache
+                enrichMessages(newMsgs)
+
+                // Append to cache
+                globalSession.cachedMessages = append(globalSession.cachedMessages, newMsgs...)
+                globalSession.lastMessageID = newMsgs[len(newMsgs)-1].ID
+                globalSession.messagesLoaded = true
         }
 
         // Return a copy of the cache
@@ -325,70 +342,10 @@ func enrichMessages(msgs []ChatMessage) {
         }
 }
 
-// startRealtime starts the Supabase Realtime WebSocket listener.
-// When a new message INSERT arrives, it's appended to the cache.
-// Caller must hold globalSession.mu (or be in a context where it's safe).
-func startRealtime() {
-        if globalSession.realtime != nil {
-                return
-        }
-        supabaseURL := globalSession.supabase.baseURL
-        apiKey := globalSession.supabase.apiKey
-        globalSession.realtime = NewRealtimeClient(supabaseURL, apiKey)
-
-        go func() {
-                err := globalSession.realtime.Start(func(msg ChatMessage) {
-                        globalSession.mu.Lock()
-                        defer globalSession.mu.Unlock()
-
-                        // Skip if we already have this message (dedup by ID)
-                        for _, existing := range globalSession.cachedMessages {
-                                if existing.ID == msg.ID {
-                                        return
-                                }
-                        }
-
-                        // Enrich the new message
-                        enriched := []ChatMessage{msg}
-                        enrichMessages(enriched)
-                        globalSession.cachedMessages = append(globalSession.cachedMessages, enriched[0])
-                        if msg.ID > globalSession.lastMessageID {
-                                globalSession.lastMessageID = msg.ID
-                        }
-
-                        // If the sender is unknown, fetch their account (one HTTP request)
-                        if msg.SenderToken != "" {
-                                if _, ok := globalSession.accountCache[msg.SenderToken]; !ok {
-                                        if acc, err := globalSession.supabase.GetAccountByToken(msg.SenderToken); err == nil && acc != nil {
-                                                globalSession.accountCache[msg.SenderToken] = acc
-                                                // Update the just-added message's avatar
-                                                enriched[0].SenderAvatar = acc.AvatarURL
-                                                if acc.Username != "" {
-                                                        enriched[0].SenderName = acc.Username
-                                                }
-                                                // Replace the last message in cache with the enriched version
-                                                if len(globalSession.cachedMessages) > 0 {
-                                                        globalSession.cachedMessages[len(globalSession.cachedMessages)-1] = enriched[0]
-                                                }
-                                        }
-                                }
-                        }
-                })
-                _ = err
-        }()
-}
-
-// LogoutAPI clears the current account, stops the Realtime listener,
-// and removes the persisted file.
+// LogoutAPI clears the current account and removes the persisted file.
 func LogoutAPI() error {
         globalSession.mu.Lock()
         defer globalSession.mu.Unlock()
-
-        // Stop the realtime listener
-        if globalSession.realtime != nil {
-                globalSession.realtime.Stop()
-                globalSession.realtime = nil
-        }
 
         globalSession.account = nil
         globalSession.cachedMessages = nil
