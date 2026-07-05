@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -20,6 +21,7 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
+import android.util.Log
 import android.text.style.StyleSpan
 import android.util.TypedValue
 import android.view.Gravity
@@ -581,29 +583,175 @@ class FloatingChatService : Service() {
                 col.addView(sender)
             }
 
-            val bubble = TextView(this).apply {
-                text = msg.text
-                setTextColor(if (isOutgoing) Color.WHITE else colorTextPrimary)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setPadding(dp(10), dp(7), dp(10), dp(7))
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(14).toFloat()
-                    cornerRadii = floatArrayOf(
-                        dp(14).toFloat(), dp(14).toFloat(),
-                        dp(14).toFloat(), dp(14).toFloat(),
-                        if (isOutgoing) dp(4).toFloat() else dp(14).toFloat(),
-                        if (isOutgoing) dp(4).toFloat() else dp(14).toFloat(),
-                        if (isOutgoing) dp(14).toFloat() else dp(4).toFloat(),
-                        if (isOutgoing) dp(14).toFloat() else dp(4).toFloat()
-                    )
-                    setColor(if (isOutgoing) colorBubbleOutgoing else colorBubbleIncoming)
-                }
-                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                lp.bottomMargin = dp(1)
-                maxWidth = dp(190)
-                layoutParams = lp
+            // === Bubble content: depends on media type ===
+            val bubbleBg = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                cornerRadii = floatArrayOf(
+                    dp(14).toFloat(), dp(14).toFloat(),
+                    dp(14).toFloat(), dp(14).toFloat(),
+                    if (isOutgoing) dp(4).toFloat() else dp(14).toFloat(),
+                    if (isOutgoing) dp(4).toFloat() else dp(14).toFloat(),
+                    if (isOutgoing) dp(14).toFloat() else dp(4).toFloat(),
+                    if (isOutgoing) dp(14).toFloat() else dp(4).toFloat()
+                )
+                setColor(if (isOutgoing) colorBubbleOutgoing else colorBubbleIncoming)
             }
-            col.addView(bubble)
+            val bubbleTextColor = if (isOutgoing) Color.WHITE else colorTextPrimary
+            val bubbleTint = if (isOutgoing) Color.WHITE else colorPrimary
+
+            when (msg.mediaType) {
+                "audio" -> {
+                    // Audio player bubble
+                    val audioRow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        background = bubbleBg
+                        setPadding(dp(10), dp(7), dp(10), dp(7))
+                        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        lp.bottomMargin = dp(1)
+                        layoutParams = lp
+                    }
+                    val playBtn = ImageButton(this).apply {
+                        setImageResource(android.R.drawable.ic_media_play)
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(bubbleTint)
+                        }
+                        setPadding(dp(8), dp(8), dp(8), dp(8))
+                        imageTintList = android.content.res.ColorStateList.valueOf(
+                            if (isOutgoing) colorBubbleOutgoing else colorSurfaceElevated
+                        )
+                        val lp = LinearLayout.LayoutParams(dp(32), dp(32))
+                        lp.marginEnd = dp(8)
+                        layoutParams = lp
+                    }
+                    val micIcon = TextView(this).apply {
+                        text = "🎤"
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                    }
+                    val durLabel = TextView(this).apply {
+                        text = "Áudio"
+                        setTextColor(bubbleTextColor)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        lp.marginStart = dp(4)
+                        layoutParams = lp
+                    }
+                    audioRow.addView(playBtn)
+                    audioRow.addView(micIcon)
+                    audioRow.addView(durLabel)
+                    col.addView(audioRow)
+
+                    // Wire up MediaPlayer
+                    val url = msg.mediaUrl
+                    var mediaPlayer: android.media.MediaPlayer? = null
+                    var isPlaying = false
+                    playBtn.setOnClickListener {
+                        if (url == null || url.isEmpty()) return@setOnClickListener
+                        if (mediaPlayer != null && isPlaying) {
+                            mediaPlayer?.pause()
+                            isPlaying = false
+                            playBtn.setImageResource(android.R.drawable.ic_media_play)
+                        } else if (mediaPlayer != null && !isPlaying) {
+                            mediaPlayer?.start()
+                            isPlaying = true
+                            playBtn.setImageResource(android.R.drawable.ic_media_pause)
+                        } else {
+                            // Create and prepare
+                            playBtn.setImageResource(android.R.drawable.ic_popup_sync)
+                            Thread {
+                                try {
+                                    val mp = android.media.MediaPlayer().apply {
+                                        setDataSource(url)
+                                        setOnPreparedListener { player ->
+                                            playBtn.post {
+                                                playBtn.setImageResource(android.R.drawable.ic_media_pause)
+                                                isPlaying = true
+                                            }
+                                            player.start()
+                                        }
+                                        setOnCompletionListener {
+                                            playBtn.post {
+                                                playBtn.setImageResource(android.R.drawable.ic_media_play)
+                                                isPlaying = false
+                                            }
+                                            it.seekTo(0)
+                                        }
+                                        setOnErrorListener { _, _, _ ->
+                                            playBtn.post {
+                                                playBtn.setImageResource(android.R.drawable.ic_media_play)
+                                            }
+                                            true
+                                        }
+                                        prepareAsync()
+                                    }
+                                    mediaPlayer = mp
+                                } catch (e: Exception) {
+                                    Log.e("FloatingChat", "Audio play error", e)
+                                    playBtn.post {
+                                        playBtn.setImageResource(android.R.drawable.ic_media_play)
+                                    }
+                                }
+                            }.start()
+                        }
+                    }
+                }
+                "image" -> {
+                    // Image bubble (thumbnail, clickable to open full screen)
+                    val imgView = ImageView(this).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        background = bubbleBg
+                        val lp = LinearLayout.LayoutParams(dp(180), dp(120))
+                        lp.bottomMargin = dp(1)
+                        layoutParams = lp
+                        setOnClickListener {
+                            // Open URL in browser as simple full-screen viewer
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(msg.mediaUrl))
+                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            startActivity(intent)
+                        }
+                    }
+                    // Load image via Coil
+                    if (msg.mediaUrl != null && msg.mediaUrl.isNotEmpty()) {
+                        val request = ImageRequest.Builder(this)
+                            .data(msg.mediaUrl)
+                            .target(imgView)
+                            .build()
+                        imageLoader.enqueue(request)
+                    }
+                    col.addView(imgView)
+                    // Also show caption text if present
+                    if (msg.text.isNotEmpty() && msg.text != "📸" && msg.text != "📸 Screenshot") {
+                        val caption = TextView(this).apply {
+                            text = msg.text
+                            setTextColor(bubbleTextColor)
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                            setPadding(dp(10), dp(4), dp(10), dp(4))
+                            background = bubbleBg
+                            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                            lp.topMargin = dp(1)
+                            maxWidth = dp(190)
+                            layoutParams = lp
+                        }
+                        col.addView(caption)
+                    }
+                }
+                else -> {
+                    // Regular text bubble
+                    val bubble = TextView(this).apply {
+                        text = msg.text
+                        setTextColor(bubbleTextColor)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setPadding(dp(10), dp(7), dp(10), dp(7))
+                        background = bubbleBg
+                        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        lp.bottomMargin = dp(1)
+                        maxWidth = dp(190)
+                        layoutParams = lp
+                    }
+                    col.addView(bubble)
+                }
+            }
 
             // Timestamp
             val time = TextView(this).apply {
